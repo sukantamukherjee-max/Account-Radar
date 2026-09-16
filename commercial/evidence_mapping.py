@@ -31,6 +31,7 @@ from commercial.text_heuristics import (
     is_low_trust_span,
     looks_like_customer_product_page,
     looks_like_customer_requirement_span,
+    looks_like_vendor_case_study_span,
     sentence_spans,
     span_containing,
 )
@@ -313,6 +314,7 @@ def _span_disqualifies_evidence(segment: str) -> bool:
         is_low_trust_span(segment)
         or looks_like_customer_requirement_span(segment)
         or _is_collective_scope_span(segment)
+        or looks_like_vendor_case_study_span(segment)
     )
 
 

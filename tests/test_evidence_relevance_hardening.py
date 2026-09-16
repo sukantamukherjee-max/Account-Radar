@@ -1194,3 +1194,84 @@ def test_existing_capability_evidence_alone_still_cannot_create_opportunity():
     assert promoted[0].evidence_category == EvidenceCategory.EXISTING_CAPABILITY_CONTEXT.value
     opportunities = build_opportunity_hypotheses(mappings)
     assert "enterprise_managed_services" not in {o.capability_id for o in opportunities}
+def test_vendor_case_study_narrative_does_not_promote_capability_evidence():
+    content = (
+        f"For instance, we helped {ORG_NAME} digitize its entire procurement lifecycle. "
+        f"One of our clients, {ORG_NAME}, needed a cybersecurity programme with stronger "
+        "regulatory compliance and reduced cyber risk across its operations."
+    )
+    s = _source(
+        url="https://example-vendor.com/blog/rfp-software",
+        content=content,
+        source_type="technology",
+    )
+    mappings = map_source_to_capabilities(
+        s, organization_name=ORG_NAME, country=COUNTRY
+    )
+    assert not _promoted(mappings, "cybersecurity_resilience")
+
+
+def test_organization_originated_requirement_with_same_vocabulary_still_promotes():
+    content = (
+        f"{ORG_NAME} announced plans to procure a new cybersecurity programme, prioritising "
+        "regulatory compliance and reduced cyber risk across its operations."
+    )
+    s = _source(
+        url="https://example-vendor.com/blog/rfp-software",
+        content=content,
+        source_type="technology",
+    )
+    mappings = map_source_to_capabilities(
+        s, organization_name=ORG_NAME, country=COUNTRY
+    )
+    assert _promoted(mappings, "cybersecurity_resilience")
+
+
+def test_vendor_case_study_sentence_does_not_suppress_separate_evidence_in_same_source():
+    content = (
+        f"For instance, we helped {ORG_NAME} digitize its entire procurement lifecycle using "
+        "SharePoint and Power Automate for complex approval workflows. Separately, "
+        f"{ORG_NAME} also announced it is issuing a tender for a new security operations "
+        "center to strengthen its cyber risk posture."
+    )
+    s = _source(
+        url="https://example-vendor.com/blog/rfp-software",
+        content=content,
+        source_type="technology",
+    )
+    mappings = map_source_to_capabilities(
+        s, organization_name=ORG_NAME, country=COUNTRY
+    )
+    promoted = _promoted(mappings, "cybersecurity_resilience")
+    assert promoted
+    assert promoted[0].evidence_category == EvidenceCategory.PROCUREMENT_SIGNAL.value
+
+
+def test_looks_like_vendor_case_study_span_detects_generic_delivery_narrative_patterns():
+    from commercial.text_heuristics import looks_like_vendor_case_study_span
+
+    positive = [
+        "For instance, we helped a national airline digitize its procurement lifecycle.",
+        "We worked with a regional airline to modernize its systems.",
+        "We delivered a SharePoint-based procurement solution for the client.",
+        "Take a look at our case study on the Microsoft Power Platform-based solution.",
+        "In a recent engagement with an aviation client, we streamlined vendor onboarding.",
+        "Our work with the airline focused on automating approvals.",
+        "One of our clients, a national carrier, needed faster RFP cycles.",
+    ]
+    for text in positive:
+        assert looks_like_vendor_case_study_span(text), f"expected to match: {text!r}"
+
+
+def test_looks_like_vendor_case_study_span_does_not_flag_current_customer_originated_language():
+    from commercial.text_heuristics import looks_like_vendor_case_study_span
+
+    negative = [
+        f"{ORG_NAME} announced plans to procure a new cybersecurity platform.",
+        f"{ORG_NAME} is opening a new facility that will require additional network capacity.",
+        "The organization is scaling up its operations across the region.",
+        f"{ORG_NAME} selected a vendor to implement a new RFP management system this quarter.",
+        "We are excited to announce our new partnership with the airline to implement Y.",
+    ]
+    for text in negative:
+        assert not looks_like_vendor_case_study_span(text), f"expected NOT to match: {text!r}"

@@ -339,6 +339,23 @@ def is_low_trust_span(segment: str) -> bool:
     itself disqualify that sentence.)
     """
     return looks_like_label_list(segment) or looks_like_navigation_or_aggregator_text(segment)
+_VENDOR_CASE_STUDY_MARKERS_RE = re.compile(
+    r"\bwe helped\b"
+    r"|\bwe (have )?worked with\b"
+    r"|\bwe (recently )?delivered\b"
+    r"|\bour (recent )?work with\b"
+    r"|\bcase stud(y|ies)\b"
+    r"|\b(a|one of our|our) (recent |previous |past )?(client|customer)s?\b"
+    r"|\bin (a|our) (recent|previous) (engagement|project|implementation) (with|for)\b"
+    r"|\bfor (our|a) (client|customer)\b",
+    re.I,
+)
+
+
+def looks_like_vendor_case_study_span(segment: str) -> bool:
+    if not segment:
+        return False
+    return bool(_VENDOR_CASE_STUDY_MARKERS_RE.search(segment))
 
 
 def clean_evidence_excerpt(text: str, *, matched_terms: list[str] | None = None, max_chars: int = 900) -> str:
