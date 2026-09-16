@@ -1,0 +1,274 @@
+{
+  "before_total_undifferentiated_hits": 14,
+  "after_direct_evidence": 4,
+  "after_strong_inference": 0,
+  "after_weak_relevance": 10,
+  "incumbent_evidence_items": 3,
+  "after_mappings": [
+    {
+      "capability_id": "network_connectivity",
+      "capability_name": "Network & Connectivity",
+      "evidence_level": "weak_relevance",
+      "matched_terms": [
+        "new facility"
+      ],
+      "source_url": "https://www.example-airports.test/news/digital-transformation",
+      "source_title": "Oman Airports Management Company announces digital transformation programme",
+      "confidence": 27.0,
+      "supporting_context": "t architecture and a new security operations center. The organization is expanding into a new facility to support the terminal expansion.",
+      "business_impact": "Customer expansion, distributed operations or explicit network activity can create requirements for connectivity, capacity, resilience and service assurance.",
+      "technology_requirement": "Networking, Optical, SD-WAN, Fibre, 5G",
+      "signal_type": null,
+      "incumbent_context": []
+    },
+    {
+      "capability_id": "data_centre_infrastructure",
+      "capability_name": "Data Centre & Infrastructure",
+      "evidence_level": "weak_relevance",
+      "matched_terms": [
+        "new facility"
+      ],
+      "source_url": "https://www.example-airports.test/news/digital-transformation",
+      "source_title": "Oman Airports Management Company announces digital transformation programme",
+      "confidence": 27.0,
+      "supporting_context": "t architecture and a new security operations center. The organization is expanding into a new facility to support the terminal expansion.",
+      "business_impact": "Business growth, new facilities and workload expansion can create demand for compute, storage, hosting, resilience, backup/DR and lifecycle services.",
+      "technology_requirement": "Data Centre, Compute, Storage, Backup/DR",
+      "signal_type": null,
+      "incumbent_context": []
+    },
+    {
+      "capability_id": "cloud_ai_infrastructure",
+      "capability_name": "Cloud & AI Infrastructure",
+      "evidence_level": "direct_evidence",
+      "matched_terms": [
+        "cloud migration",
+        "cloud platform"
+      ],
+      "source_url": "https://www.example-airports.test/news/digital-transformation",
+      "source_title": "Oman Airports Management Company announces digital transformation programme",
+      "confidence": 85.0,
+      "supporting_context": "formation programme as part of a new terminal expansion project. The programme includes a cloud migration initiative, moving core operational workloads to a new cloud platform, alongside a cybers",
+      "business_impact": "Digital, data and AI initiatives can increase demand for scalable compute, cloud, storage, networking, security and managed infrastructure.",
+      "technology_requirement": "Cloud, AI Infrastructure, GPU/Compute, Managed Cloud",
+      "signal_type": "technology_initiative",
+      "incumbent_context": []
+    },
+    {
+      "capability_id": "cybersecurity_resilience",
+      "capability_name": "Cybersecurity & Resilience",
+      "evidence_level": "direct_evidence",
+      "matched_terms": [
+        "cybersecurity programme",
+        "security operations center",
+        "zero trust architecture"
+      ],
+      "source_url": "https://www.example-airports.test/news/digital-transformation",
+      "source_title": "Oman Airports Management Company announces digital transformation programme",
+      "confidence": 90.0,
+      "supporting_context": "ration initiative, moving core operational workloads to a new cloud platform, alongside a cybersecurity programme covering zero trust architecture and a new security operations center. The organization i",
+      "business_impact": "Digital growth, new sites, integration and resilience requirements can increase the need for protection, continuity, recovery and managed security.",
+      "technology_requirement": "Cybersecurity, SOC, DDoS, Backup/DR, Zero Trust, Resilience",
+      "signal_type": "technology_initiative",
+      "incumbent_context": []
+    },
+    {
+      "capability_id": "enterprise_managed_services",
+      "capability_name": "Enterprise Managed Services",
+      "evidence_level": "direct_evidence",
+      "matched_terms": [
+        "digital transformation programme"
+      ],
+      "source_url": "https://www.example-airports.test/news/digital-transformation",
+      "source_title": "Oman Airports Management Company announces digital transformation programme",
+      "confidence": 80.0,
+      "supporting_context": "Oman Airports Management Company today announced a major digital transformation programme as part of a new terminal expansion project. The programme includes a cloud migration ini",
+      "business_impact": "Expansion and transformation programmes can create external delivery, migration, integration, operations and managed-service requirements.",
+      "technology_requirement": "Managed Services, ICT Operations, Cloud Operations, Digital Transformation",
+      "signal_type": "technology_initiative",
+      "incumbent_context": []
+    },
+    {
+      "capability_id": "network_connectivity",
+      "capability_name": "Network & Connectivity",
+      "evidence_level": "weak_relevance",
+      "matched_terms": [
+        "network"
+      ],
+      "source_url": "https://www.example-news.test/business/airport-cisco-network-renewal",
+      "source_title": "Oman Airports Management Company renews network partnership with Cisco",
+      "confidence": 22.0,
+      "supporting_context": "Airports Management Company has renewed its long-standing partnership with Cisco for its network infrastructure, the incumbent vendor for the organization's core network. In separate ind",
+      "business_impact": "Customer expansion, distributed operations or explicit network activity can create requirements for connectivity, capacity, resilience and service assurance.",
+      "technology_requirement": "Networking, Optical, SD-WAN, Fibre, 5G",
+      "signal_type": null,
+      "incumbent_context": [
+        "Cisco",
+        "long-standing partnership",
+        "incumbent"
+      ]
+    },
+    {
+      "capability_id": "data_centre_infrastructure",
+      "capability_name": "Data Centre & Infrastructure",
+      "evidence_level": "weak_relevance",
+      "matched_terms": [
+        "storage"
+      ],
+      "source_url": "https://www.example-news.test/business/airport-cisco-network-renewal",
+      "source_title": "Oman Airports Management Company renews network partnership with Cisco",
+      "confidence": 22.0,
+      "supporting_context": "ore network. In separate industry commentary, analysts discussed general trends in cloud, storage and security software adoption across the aviation sector without detailing specific plan",
+      "business_impact": "Business growth, new facilities and workload expansion can create demand for compute, storage, hosting, resilience, backup/DR and lifecycle services.",
+      "technology_requirement": "Data Centre, Compute, Storage, Backup/DR",
+      "signal_type": null,
+      "incumbent_context": [
+        "Cisco",
+        "long-standing partnership",
+        "incumbent"
+      ]
+    },
+    {
+      "capability_id": "cloud_ai_infrastructure",
+      "capability_name": "Cloud & AI Infrastructure",
+      "evidence_level": "weak_relevance",
+      "matched_terms": [
+        "cloud"
+      ],
+      "source_url": "https://www.example-news.test/business/airport-cisco-network-renewal",
+      "source_title": "Oman Airports Management Company renews network partnership with Cisco",
+      "confidence": 22.0,
+      "supporting_context": "ion's core network. In separate industry commentary, analysts discussed general trends in cloud, storage and security software adoption across the aviation sector without detailing spec",
+      "business_impact": "Digital, data and AI initiatives can increase demand for scalable compute, cloud, storage, networking, security and managed infrastructure.",
+      "technology_requirement": "Cloud, AI Infrastructure, GPU/Compute, Managed Cloud",
+      "signal_type": null,
+      "incumbent_context": [
+        "Cisco",
+        "long-standing partnership",
+        "incumbent"
+      ]
+    },
+    {
+      "capability_id": "cybersecurity_resilience",
+      "capability_name": "Cybersecurity & Resilience",
+      "evidence_level": "weak_relevance",
+      "matched_terms": [
+        "security"
+      ],
+      "source_url": "https://www.example-news.test/business/airport-cisco-network-renewal",
+      "source_title": "Oman Airports Management Company renews network partnership with Cisco",
+      "confidence": 22.0,
+      "supporting_context": "In separate industry commentary, analysts discussed general trends in cloud, storage and security software adoption across the aviation sector without detailing specific plans.",
+      "business_impact": "Digital growth, new sites, integration and resilience requirements can increase the need for protection, continuity, recovery and managed security.",
+      "technology_requirement": "Cybersecurity, SOC, DDoS, Backup/DR, Zero Trust, Resilience",
+      "signal_type": null,
+      "incumbent_context": [
+        "Cisco",
+        "long-standing partnership",
+        "incumbent"
+      ]
+    },
+    {
+      "capability_id": "data_centre_infrastructure",
+      "capability_name": "Data Centre & Infrastructure",
+      "evidence_level": "direct_evidence",
+      "matched_terms": [
+        "compute capacity",
+        "storage infrastructure",
+        "backup and recovery",
+        "disaster recovery"
+      ],
+      "source_url": "https://www.example-tenders.test/notices/rfp-backup-dr",
+      "source_title": "RFP: Data centre backup and disaster recovery services",
+      "confidence": 95.0,
+      "supporting_context": "es, seeking storage infrastructure and backup and recovery capability to support expanded compute capacity at its data centre.",
+      "business_impact": "Business growth, new facilities and workload expansion can create demand for compute, storage, hosting, resilience, backup/DR and lifecycle services.",
+      "technology_requirement": "Data Centre, Compute, Storage, Backup/DR",
+      "signal_type": "procurement_activity",
+      "incumbent_context": []
+    },
+    {
+      "capability_id": "network_connectivity",
+      "capability_name": "Network & Connectivity",
+      "evidence_level": "weak_relevance",
+      "matched_terms": [
+        "network"
+      ],
+      "source_url": "https://www.linkedin.com/in/synthetic-person-1",
+      "source_title": "Synthetic IT Manager profile",
+      "confidence": 17.0,
+      "supporting_context": "nager profile IT Manager with a background in cloud platforms, storage infrastructure and network operations. Interests: cloud, AI, storage.",
+      "business_impact": "Customer expansion, distributed operations or explicit network activity can create requirements for connectivity, capacity, resilience and service assurance.",
+      "technology_requirement": "Networking, Optical, SD-WAN, Fibre, 5G",
+      "signal_type": null,
+      "incumbent_context": []
+    },
+    {
+      "capability_id": "data_centre_infrastructure",
+      "capability_name": "Data Centre & Infrastructure",
+      "evidence_level": "weak_relevance",
+      "matched_terms": [
+        "storage infrastructure",
+        "storage"
+      ],
+      "source_url": "https://www.linkedin.com/in/synthetic-person-1",
+      "source_title": "Synthetic IT Manager profile",
+      "confidence": 19.0,
+      "supporting_context": "Synthetic IT Manager profile IT Manager with a background in cloud platforms, storage infrastructure and network operations. Interests: cloud, AI, storage.",
+      "business_impact": "Business growth, new facilities and workload expansion can create demand for compute, storage, hosting, resilience, backup/DR and lifecycle services.",
+      "technology_requirement": "Data Centre, Compute, Storage, Backup/DR",
+      "signal_type": null,
+      "incumbent_context": []
+    },
+    {
+      "capability_id": "cloud_ai_infrastructure",
+      "capability_name": "Cloud & AI Infrastructure",
+      "evidence_level": "weak_relevance",
+      "matched_terms": [
+        "cloud",
+        "ai"
+      ],
+      "source_url": "https://www.linkedin.com/in/synthetic-person-1",
+      "source_title": "Synthetic IT Manager profile",
+      "confidence": 19.0,
+      "supporting_context": "Synthetic IT Manager profile IT Manager with a background in cloud platforms, storage infrastructure and network operations. Interests: cloud, AI, storage.",
+      "business_impact": "Digital, data and AI initiatives can increase demand for scalable compute, cloud, storage, networking, security and managed infrastructure.",
+      "technology_requirement": "Cloud, AI Infrastructure, GPU/Compute, Managed Cloud",
+      "signal_type": null,
+      "incumbent_context": []
+    },
+    {
+      "capability_id": "cloud_ai_infrastructure",
+      "capability_name": "Cloud & AI Infrastructure",
+      "evidence_level": "weak_relevance",
+      "matched_terms": [
+        "cloud"
+      ],
+      "source_url": "https://www.linkedin.com/in/synthetic-person-2",
+      "source_title": "Synthetic Marketing Coordinator profile",
+      "confidence": 17.0,
+      "supporting_context": "hetic Marketing Coordinator profile Marketing Coordinator. Enjoys hiking, photography and cloud watching on weekends.",
+      "business_impact": "Digital, data and AI initiatives can increase demand for scalable compute, cloud, storage, networking, security and managed infrastructure.",
+      "technology_requirement": "Cloud, AI Infrastructure, GPU/Compute, Managed Cloud",
+      "signal_type": null,
+      "incumbent_context": []
+    }
+  ],
+  "incumbent_evidence": [
+    {
+      "term": "Cisco",
+      "category": "named_vendor",
+      "source_url": "https://www.example-news.test/business/airport-cisco-network-renewal"
+    },
+    {
+      "term": "long-standing partnership",
+      "category": "incumbent_language",
+      "source_url": "https://www.example-news.test/business/airport-cisco-network-renewal"
+    },
+    {
+      "term": "incumbent",
+      "category": "incumbent_language",
+      "source_url": "https://www.example-news.test/business/airport-cisco-network-renewal"
+    }
+  ]
+}

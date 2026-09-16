@@ -1,0 +1,217 @@
+[
+  {
+    "id": "network_connectivity",
+    "name": "Network & Connectivity",
+    "capability": "Networking, Optical, SD-WAN, Fibre, 5G",
+    "keywords": [
+      "optical",
+      "dwdm",
+      "fiber",
+      "fibre",
+      "sd-wan",
+      "5g",
+      "low latency",
+      "transport network",
+      "bandwidth upgrade",
+      "network routing",
+      "network switching"
+    ],
+    "weak_signal_terms": [
+      "network",
+      "connectivity",
+      "bandwidth"
+    ],
+    "generic_triggers": [
+      "new site",
+      "new facility",
+      "facility expansion",
+      "branch expansion",
+      "geographic expansion",
+      "remote operations",
+      "multi-site",
+      "acquisition",
+      "new location",
+      "site expansion"
+    ],
+    "why": "Customer expansion, distributed operations or explicit network activity can create requirements for connectivity, capacity, resilience and service assurance.",
+    "who": "Network / Infrastructure / IT Operations / Technology leadership",
+    "conversation": "What connectivity, capacity, resilience or site-integration requirements are changing as the business expands or modernises?",
+    "next_step": "Identify the technology owner and validate current network architecture, capacity constraints, resilience requirements and upcoming site changes.",
+    "fit": 92
+  },
+  {
+    "id": "data_centre_infrastructure",
+    "name": "Data Centre & Infrastructure",
+    "capability": "Data Centre, Compute, Storage, Backup/DR",
+    "keywords": [
+      "server infrastructure",
+      "compute capacity",
+      "storage infrastructure",
+      "server rack",
+      "backup and recovery",
+      "disaster recovery",
+      "infrastructure capacity",
+      "workload hosting",
+      "virtualisation",
+      "virtualization"
+    ],
+    "weak_signal_terms": [
+      "storage",
+      "server",
+      "data center",
+      "data centre",
+      "compute"
+    ],
+    "generic_triggers": [
+      "new facility",
+      "facility expansion",
+      "new site",
+      "capacity expansion",
+      "business expansion",
+      "new location",
+      "major project",
+      "new programme",
+      "new program",
+      "acquisition",
+      "workload growth"
+    ],
+    "why": "Business growth, new facilities and workload expansion can create demand for compute, storage, hosting, resilience, backup/DR and lifecycle services.",
+    "who": "Data Centre / Infrastructure / IT Operations leadership",
+    "conversation": "What new workloads, sites or capacity requirements are expected, and where are infrastructure, hosting or resilience gaps?",
+    "next_step": "Validate workload growth, hosting model, infrastructure capacity, backup/DR and lifecycle requirements with the infrastructure owner.",
+    "fit": 94
+  },
+  {
+    "id": "cloud_ai_infrastructure",
+    "name": "Cloud & AI Infrastructure",
+    "capability": "Cloud, AI Infrastructure, GPU/Compute, Managed Cloud",
+    "keywords": [
+      "cloud migration",
+      "cloud platform",
+      "artificial intelligence platform",
+      "gpu compute",
+      "nvidia",
+      "hyperscaler",
+      "ai-ready infrastructure",
+      "accelerated computing",
+      "machine learning platform",
+      "data platform",
+      "application modernization",
+      "application modernisation"
+    ],
+    "weak_signal_terms": [
+      "cloud",
+      "ai",
+      "artificial intelligence",
+      "analytics",
+      "machine learning"
+    ],
+    "generic_triggers": [
+      "digital transformation",
+      "technology transformation",
+      "application modernisation",
+      "application modernization",
+      "data transformation",
+      "analytics programme",
+      "analytics program",
+      "new digital platform",
+      "new platform",
+      "automation programme",
+      "automation program",
+      "acquisition"
+    ],
+    "why": "Digital, data and AI initiatives can increase demand for scalable compute, cloud, storage, networking, security and managed infrastructure.",
+    "who": "CIO / CTO / Cloud / AI / Digital Technology leadership",
+    "conversation": "Which digital, data, AI or application workloads are moving into delivery, and what cloud, compute, hosting and integration requirements follow?",
+    "next_step": "Validate workloads, cloud model, compute/GPU needs, data residency, security and hybrid integration requirements.",
+    "fit": 95
+  },
+  {
+    "id": "cybersecurity_resilience",
+    "name": "Cybersecurity & Resilience",
+    "capability": "Cybersecurity, SOC, DDoS, Backup/DR, Zero Trust, Resilience",
+    "keywords": [
+      "cybersecurity programme",
+      "cyber security incident",
+      "security operations center",
+      "soc",
+      "ddos protection",
+      "zero trust architecture",
+      "ransomware",
+      "security breach",
+      "business continuity plan",
+      "disaster recovery plan",
+      "regulatory compliance",
+      "cyber risk"
+    ],
+    "weak_signal_terms": [
+      "security",
+      "cybersecurity",
+      "cyber",
+      "compliance",
+      "risk"
+    ],
+    "generic_triggers": [
+      "digital transformation",
+      "new digital platform",
+      "new facility",
+      "new site",
+      "remote operations",
+      "multi-site",
+      "acquisition",
+      "business expansion",
+      "regulatory change",
+      "business continuity",
+      "critical infrastructure"
+    ],
+    "why": "Digital growth, new sites, integration and resilience requirements can increase the need for protection, continuity, recovery and managed security.",
+    "who": "CISO / Security / Risk / Infrastructure / IT Operations leadership",
+    "conversation": "How are new business, technology or site initiatives changing your security, continuity, recovery and compliance requirements?",
+    "next_step": "Identify the security/resilience owner and qualify architecture, priority gaps, regulatory drivers and upcoming refresh or managed-security needs.",
+    "fit": 93
+  },
+  {
+    "id": "enterprise_managed_services",
+    "name": "Enterprise Managed Services",
+    "capability": "Managed Services, ICT Operations, Cloud Operations, Digital Transformation",
+    "keywords": [
+      "managed services agreement",
+      "it outsourcing",
+      "digital transformation programme",
+      "technology transformation",
+      "system modernisation",
+      "system modernization",
+      "platform migration",
+      "systems integration",
+      "managed operations",
+      "it service management"
+    ],
+    "weak_signal_terms": [
+      "outsourcing",
+      "managed services",
+      "transformation",
+      "modernization",
+      "modernisation"
+    ],
+    "generic_triggers": [
+      "business expansion",
+      "new facility",
+      "new site",
+      "major project",
+      "new programme",
+      "new program",
+      "digital transformation",
+      "acquisition",
+      "migration",
+      "modernisation",
+      "modernization",
+      "implementation",
+      "outsourcing"
+    ],
+    "why": "Expansion and transformation programmes can create external delivery, migration, integration, operations and managed-service requirements.",
+    "who": "CIO / CTO / Digital Transformation / IT Operations leadership",
+    "conversation": "Which programmes are entering delivery, and where do you need external delivery capacity, integration support or ongoing managed operations?",
+    "next_step": "Map active programmes to Otech delivery and managed-service capabilities and identify the programme or operations owner.",
+    "fit": 90
+  }
+]
