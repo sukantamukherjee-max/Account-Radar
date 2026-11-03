@@ -63,7 +63,7 @@ def build_synthesis_prompt(report: AccountRadarReport) -> str:
         f"ELIGIBLE FOR A NEXT-BEST-ACTION (eligible_for_action -- only capabilities with "
         f"direct_evidence or strong_inference support):\n{eligible_block}\n\n"
         f"DETERMINISTIC ACTION CANDIDATES (safety-net -- choose from these when recommending actions):\n{actions_block}\n\n"
-        f"CUSTOMER SIGNALS (context only, not capability-specific):\n{signals_block}\n\n"
+        f"ACCOUNT-SPECIFIC SIGNALS (ranked, strongest first; context only, not capability-specific):\n{signals_block}\n\n"
         f"INCUMBENT / VENDOR CONTEXT (context only -- never a reason to inflate confidence):\n{incumbent_block}\n"
     )
 
@@ -151,12 +151,36 @@ def _eligible_capability_ids(report: AccountRadarReport) -> set[str]:
     }
 
 
+_MAX_RANKED_SIGNAL_LINES = 12
+_MAX_REPORTED_NEWS_LINES = 4
+
+
 def _signals_block(report: AccountRadarReport) -> str:
+    """Account-specific signals in RANKED order from the normalized account-
+    signal layer (ui.account_signals) -- the same ranking the Executive
+    Summary and UNDERSTAND use -- instead of the first signals in crawl
+    order. Industry context, directory boilerplate, page chrome and personal
+    LinkedIn profiles are excluded by that layer. Reported news (an account
+    news item on a non-account site) is listed separately and labelled as
+    not direct account evidence. Context only; not citable evidence."""
     if not report.signals:
         return "(none)"
+    from ui.account_signals import normalize_account_signals  # local: keeps ai importable without ui at load time
+
+    signal_set = normalize_account_signals(report.to_dict())
     lines = []
-    for s in report.signals[:20]:  # keep the prompt compact; this is context, not the citable evidence
-        lines.append(f"- [{s.signal_type}] {s.text[:160]!r} <- {s.source_url}")
+    for k in signal_set.ranked[:_MAX_RANKED_SIGNAL_LINES]:
+        lines.append(f"- [{k.signal_type} | {k.class_label} | {k.strength}] {k.excerpt[:160]!r} <- {k.source_url}")
+    for k in signal_set.reported_news[:_MAX_REPORTED_NEWS_LINES]:
+        lines.append(
+            f"- [{k.signal_type} | reported news on a non-account site -- NOT direct account evidence] "
+            f"{k.excerpt[:160]!r} <- {k.source_url}"
+        )
+    if not lines:
+        return (
+            f"(none account-specific -- {len(report.signals)} raw signal(s) were industry/context, directory or "
+            "profile content and are withheld)"
+        )
     return "\n".join(lines)
 
 

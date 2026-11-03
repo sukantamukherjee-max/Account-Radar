@@ -17,7 +17,7 @@ referenced.
 
 from __future__ import annotations
 
-from research.linkedin import GENERIC_LINKEDIN_DIMENSIONS, _person_queries, discover_linkedin
+from research.linkedin import _person_queries, discover_linkedin
 from research.organization import ResolvedOrganization
 from research.providers.base import QueryOutcome, RawResult
 
@@ -132,50 +132,52 @@ def test_already_resolved_company_page_is_not_overwritten_or_double_counted():
 
 
 # ---------------------------------------------------------------------------
-# Item 9: the seven dimensions actually generate queries and process
-# returned /in/ candidates.
+# Item 9 (updated for People Intelligence v2 / Brave optimisation): discovery
+# dimensions are the taxonomy query families (people_discovery.query_families
+# in commercial/people_taxonomy.json) instead of a fixed list of seven; every
+# family generates queries and dimension-tagged processing works end to end.
 # ---------------------------------------------------------------------------
 
-def test_all_seven_dimensions_generate_queries():
+_DIMENSION_PREFIXES = ("family:",)
+_PLAIN_DIMENSIONS = {"general_workforce"}
+
+
+def _planned_dimensions() -> set[str]:
+    return {d for d, _ in _person_queries(ORG_NAME, ORG_COUNTRY)}
+
+
+def test_taxonomy_dimensions_generate_queries():
     pairs = _person_queries(ORG_NAME, ORG_COUNTRY)
     dimension_names = {d for d, _ in pairs}
-    expected = {name for name, _ in GENERIC_LINKEDIN_DIMENSIONS}
-    assert dimension_names == expected
-    assert len(expected) == 7
-    assert len(pairs) >= 7  # at least one query per dimension
+    assert "general_workforce" in dimension_names
+    assert "family:technology_leadership" in dimension_names
+    for d in dimension_names:
+        assert d in _PLAIN_DIMENSIONS or d.startswith(_DIMENSION_PREFIXES), d
+    assert len(pairs) >= 7
     # Every query string must actually mention the organization.
     for _, q in pairs:
         assert ORG_NAME in q
 
 
-def test_all_seven_dimensions_process_returned_in_candidates():
+def test_planned_dimensions_process_returned_in_candidates():
     """With a provider that returns real-shaped /in/ URLs for every query,
-    every one of the seven dimensions must end up with at least one
-    counted candidate -- proving dimension-tagged processing actually
-    works end to end, not just that queries are constructed.
-    """
+    candidates are counted against the dimension that first surfaced them
+    and every planned dimension is reported (zero or more)."""
     provider = _StaticLinkedInProvider(_MIXED_RESULTS)
     result = discover_linkedin(_org(), [provider])
 
-    expected_dimensions = {name for name, _ in GENERIC_LINKEDIN_DIMENSIONS}
-    assert set(result.dimension_counts.keys()) == expected_dimensions
-    assert len(result.dimension_counts) == 7
-    for dimension, count in result.dimension_counts.items():
-        assert count > 0, f"dimension {dimension!r} produced zero candidates"
+    assert set(result.dimension_counts.keys()) == _planned_dimensions()
+    assert sum(result.dimension_counts.values()) == len(result.profile_candidates)
+    assert result.dimension_counts["general_workforce"] > 0
     assert len(result.profile_candidates) > 0
 
 
 def test_zero_results_across_all_dimensions_is_still_reported_honestly():
-    """The opposite case, for completeness: a provider that genuinely
-    returns nothing must still leave dimension_counts correctly shaped
-    (all zero, not missing keys) rather than silently omitting dimensions
-    -- this is what let the original bug's zero-everywhere pattern be
-    diagnosed from the report in the first place.
-    """
+    """A provider that genuinely returns nothing must still leave
+    dimension_counts correctly shaped (all zero, not missing keys)."""
     provider = _StaticLinkedInProvider([])
     result = discover_linkedin(_org(), [provider])
-    expected_dimensions = {name for name, _ in GENERIC_LINKEDIN_DIMENSIONS}
-    assert set(result.dimension_counts.keys()) == expected_dimensions
+    assert set(result.dimension_counts.keys()) == _planned_dimensions()
     assert all(count == 0 for count in result.dimension_counts.values())
     assert result.profile_candidates == []
 

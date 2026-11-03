@@ -39,7 +39,7 @@ def test_no_hardcoded_organization_names_in_research_package():
     research_dir = REPO_ROOT / "research"
     offending = []
     for path in research_dir.rglob("*.py"):
-        tree = ast.parse(path.read_text(), filename=str(path))
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         for node in ast.walk(tree):
             if isinstance(node, ast.Compare) and any(isinstance(op, ast.Eq) for op in node.ops):
                 for side in [node.left] + node.comparators:

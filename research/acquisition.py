@@ -51,6 +51,7 @@ class FamilyDiagnostic:
     fallback_triggered: bool
     fallback_reason: str | None
     errors: list[str]
+    provider_requests: dict = field(default_factory=dict)  # queries sent per provider
 
     @classmethod
     def from_family_outcome(cls, fo: FamilyOutcome) -> "FamilyDiagnostic":
@@ -64,6 +65,7 @@ class FamilyDiagnostic:
             fallback_triggered=fo.fallback_triggered,
             fallback_reason=fo.fallback_reason,
             errors=fo.errors,
+            provider_requests=fo.provider_requests,
         )
 
 
@@ -111,6 +113,26 @@ class AcquisitionDiagnostics:
         return f"{triggered}/{total} families ({pct}%)"
 
     @property
+    def providers_used(self) -> list[str]:
+        """Search providers actually invoked during this run, in first-use
+        order (e.g. ["brave"] or ["brave", "tavily"])."""
+        out: list[str] = []
+        for f in self.family_diagnostics:
+            for name in f.providers_used:
+                if name not in out:
+                    out.append(name)
+        return out
+
+    @property
+    def provider_requests(self) -> dict[str, int]:
+        """Approximate provider consumption: queries sent per provider."""
+        out: dict[str, int] = {}
+        for f in self.family_diagnostics:
+            for name, count in (f.provider_requests or {}).items():
+                out[name] = out.get(name, 0) + count
+        return out
+
+    @property
     def all_errors(self) -> list[str]:
         out = []
         for f in self.family_diagnostics:
@@ -131,6 +153,8 @@ class AcquisitionDiagnostics:
             "duplicates_removed": self.duplicates_removed,
             "fallback_frequency": self.fallback_frequency,
             "fallback_families": self.fallback_families,
+            "providers_used": self.providers_used,
+            "provider_requests": self.provider_requests,
             "access_status_counts": self.access_status_counts,
             "source_type_counts": self.source_type_counts,
             "linkedin_dimension_counts": self.linkedin_dimension_counts,
@@ -142,6 +166,7 @@ class AcquisitionDiagnostics:
                     "results_returned": f.results_returned,
                     "unique_urls": f.unique_urls,
                     "providers_used": f.providers_used,
+                    "provider_requests": f.provider_requests,
                     "fallback_triggered": f.fallback_triggered,
                     "fallback_reason": f.fallback_reason,
                     "error_count": len(f.errors),

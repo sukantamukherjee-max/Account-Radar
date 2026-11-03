@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import sys
 from pathlib import Path
@@ -447,7 +447,7 @@ def test_research_items_does_not_duplicate_same_chain_source_title():
 
 def test_research_workspace_exists_and_is_connected_to_main():
     text = (ROOT / "app.py").read_text(encoding="utf-8")
-    assert '["WATCH", "UNDERSTAND", "DECIDE", "ACT", "RESEARCH"]' in text
+    assert '["WATCH", "UNDERSTAND", "DECIDE", "ACT", "RESEARCH", "PEOPLE"]' in text
     assert "def _render_research(" in text
     assert "Validate" in text
     assert "review" in text.lower()
@@ -493,3 +493,4 @@ def test_chain_contains_clean_evidence_excerpt_field():
     text = Path("research/analysis/report.py").read_text(encoding="utf-8")
     assert '"evidence_excerpt": evidence_excerpt or None' in text
     assert '"published_at":' in text
+

@@ -334,3 +334,22 @@ def test_evidence_gate_rejects_generic_capability_buzzwords():
         claim_terms=["AI", "aviation investment"],
     )
     assert not result.eligible
+
+def test_evidence_extractor_preserves_structural_list_boundaries():
+    from research.fetcher import _text_from_html
+
+    html = """<html><body>
+    <ul>
+      <li>Oman Air awarded a new contract.</li>
+      <li>Oman Airports issued an aviation tender.</li>
+      <li>Oman Air is expanding its fleet.</li>
+    </ul>
+    </body></html>"""
+
+    text = _text_from_html(html)
+
+    assert text == (
+        "Oman Air awarded a new contract.\n\n"
+        "Oman Airports issued an aviation tender.\n\n"
+        "Oman Air is expanding its fleet."
+    )

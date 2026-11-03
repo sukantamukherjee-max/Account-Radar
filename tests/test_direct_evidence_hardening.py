@@ -17,7 +17,7 @@ could apply to any account.
 from __future__ import annotations
 
 from commercial.capabilities import get_catalog
-from commercial.evidence_mapping import map_source_to_capabilities
+from commercial.evidence_mapping import _mentions_organization, _org_core_tokens, map_source_to_capabilities
 from commercial.models import EvidenceLevel
 from research.sources import AccessStatus, Source
 
@@ -198,3 +198,302 @@ def test_no_capability_has_a_term_in_both_keywords_and_weak_signal_terms():
         weak_set = {w.strip().lower() for w in capability.get("weak_signal_terms", [])}
         overlap = keyword_set & weak_set
         assert not overlap, f"{capability['id']!r} has overlapping keyword/weak terms: {overlap}"
+
+
+# ---------------------------------------------------------------------------
+# Fix B: single-remaining-core-token organization association must require
+# the literal full organization name, not a raw or word-boundary token
+# match. Confirmed live false-positive class (Oman Air investigation): an
+# organization name that reduces to one short/generic token after country
+# stripping in _org_core_tokens (e.g. "Oman Air" -> ["air"]) is too weak to
+# trust alone -- both as a substring ("chairman", "fairness") and as a
+# genuine whole word ("air traffic").
+# ---------------------------------------------------------------------------
+
+def test_org_token_does_not_match_as_substring_of_unrelated_word_fairness():
+    tokens = _org_core_tokens("Oman Air", country="Oman")
+    assert tokens == ["air"]
+    assert not _mentions_organization(
+        "Manually tracking documentation and ensuring fairness in vendor selection is difficult.",
+        "Oman Air", tokens,
+    )
+
+
+def test_org_token_does_not_match_as_substring_of_unrelated_word_chairman():
+    tokens = _org_core_tokens("Oman Air", country="Oman")
+    assert not _mentions_organization(
+        "The chairman of the company announced a new partnership.",
+        "Oman Air", tokens,
+    )
+
+
+def test_org_token_does_not_match_as_substring_of_unrelated_word_repair():
+    tokens = _org_core_tokens("Oman Air", country="Oman")
+    assert not _mentions_organization(
+        "This approach helps repair gaps in the existing process.",
+        "Oman Air", tokens,
+    )
+
+
+def test_org_token_does_not_match_as_a_genuine_but_unrelated_whole_word():
+    """The harder case word-boundary matching alone does not solve: 'air
+    traffic' is a genuine whole-word match of the token 'air', but is not
+    evidence of Oman Air. The single-token early return must reject this
+    too, not just the substring-inside-another-word cases above.
+    """
+    tokens = _org_core_tokens("Oman Air", country="Oman")
+    assert not _mentions_organization(
+        "The regional hub handles significant air traffic each year.",
+        "Oman Air", tokens,
+    )
+
+
+def test_org_token_still_matches_via_the_literal_full_organization_name():
+    tokens = _org_core_tokens("Oman Air", country="Oman")
+    assert _mentions_organization(
+        "Oman Air announced a new partnership this quarter.",
+        "Oman Air", tokens,
+    )
+
+
+def test_multi_token_organization_name_word_boundary_matching_unaffected():
+    """Positive control: an organization with more than one core token is
+    unaffected by the single-token early return, and still benefits from
+    word-boundary (not substring) matching.
+    """
+    tokens = _org_core_tokens("Meridian Ports Authority", country="Nordholm")
+    assert len(tokens) > 1
+    # Whole-word occurrence of enough tokens still matches.
+    assert _mentions_organization(
+        "Meridian Ports handled record cargo volumes this year.",
+        "Meridian Ports Authority", tokens,
+    )
+    # A token embedded inside an unrelated longer word must not count.
+    assert not _mentions_organization(
+        "The portable meridianite alloy was used in the new equipment.",
+        "Meridian Ports Authority", tokens,
+    )
+
+
+# ---------------------------------------------------------------------------
+# End-to-end live false-positive reproductions
+# ---------------------------------------------------------------------------
+
+def test_aufait_shaped_generic_marketing_page_does_not_reach_direct_evidence():
+    """Reproduces the confirmed live mechanism: no genuine Oman Air mention
+    anywhere on the page; organization association was only ever reachable
+    via the 'fairness' substring match on the single remaining token 'air'.
+    """
+    content = (
+        "Manually tracking documentation and ensuring fairness in vendor selection is difficult. "
+        "How RFP Software Helps: Logs every action with an audit trail, making the process "
+        "traceable. Implements role-based access controls to protect sensitive information. "
+        "Regulatory compliance tracking (ISO, SOC 2, GDPR, etc.) is included for teams that need it."
+    )
+    s = _source(source_type="technology", content=content)
+    mappings = map_source_to_capabilities(s, organization_name="Oman Air", country="Oman")
+    assert not any(m.evidence_level == EvidenceLevel.DIRECT_EVIDENCE for m in mappings)
+    cyber = [m for m in mappings if m.capability_id == "cybersecurity_resilience"]
+    assert not any(m.evidence_level == EvidenceLevel.DIRECT_EVIDENCE for m in cyber)
+
+
+def test_zawya_shaped_unrelated_press_release_does_not_associate_with_org():
+    """Reproduces the confirmed live mechanism on the second source: no
+    genuine Oman Air mention; organization association was only reachable
+    via the 'chairman' substring match on the single remaining token 'air'.
+    """
+    content = (
+        "The chairman of Otech announced a new collaboration with Kaspersky to expand locally "
+        "hosted cybersecurity services in Oman."
+    )
+    s = _source(source_type="news", content=content)
+    mappings = map_source_to_capabilities(s, organization_name="Oman Air", country="Oman")
+    assert not any(
+        m.evidence_level in (EvidenceLevel.DIRECT_EVIDENCE, EvidenceLevel.STRONG_INFERENCE)
+        for m in mappings
+    )
+
+
+# ---------------------------------------------------------------------------
+# Organization-identity + industry-context hardening (Oman Airports
+# Management Company review). These deliberately use the real account name
+# that exposed the defect: a multi-word legal name whose non-country words
+# include generic corporate words ("management", "company").
+# ---------------------------------------------------------------------------
+
+from commercial.evidence_mapping import _org_short_name  # noqa: E402
+from commercial.models import EpistemicStatus  # noqa: E402
+from commercial.opportunities import build_opportunity_hypotheses  # noqa: E402
+
+_OAMC = "Oman Airports Management Company"
+_OA_SHORT = "Oman Airports"
+
+
+def _titled_source(*, source_type: str, content: str, url: str, title: str) -> Source:
+    from urllib.parse import urlparse
+    return Source(
+        url=url, domain=urlparse(url).netloc, title=title, source_type=source_type, snippet="",
+        discovered_via_query="q", discovery_provider="test", family="generic",
+        content=content, access_status=AccessStatus.FETCHED,
+    )
+
+
+def _no_direct_and_no_confirmed(mappings) -> None:
+    assert not any(m.evidence_level == EvidenceLevel.DIRECT_EVIDENCE for m in mappings)
+    assert not any(m.epistemic_status == EpistemicStatus.CONFIRMED_EVIDENCE.value for m in mappings)
+    assert not any(
+        o.epistemic_status == EpistemicStatus.CONFIRMED_EVIDENCE.value
+        for o in build_opportunity_hypotheses(mappings)
+    )
+
+
+def test_vendor_article_never_naming_org_is_not_direct_and_creates_no_confirmed_opportunity():
+    """Generic corporate words ('company', 'management') plus 'airports' in
+    ordinary prose must not stand in for the organization's identity. The
+    URL/title carry no trend marker, so this exercises the organization-
+    association fix on its own (not the industry-context guard)."""
+    s = _titled_source(
+        source_type="technology",
+        url="https://vendor.example/blog/securing-ot-networks",
+        title="Securing OT networks",
+        content=(
+            "Airports and airport management companies are deploying a security operations center "
+            "and zero trust architecture to protect OT networks. Every company's security management "
+            "team is implementing ransomware defences and a disaster recovery plan."
+        ),
+    )
+    for org in (_OAMC, _OA_SHORT):
+        mappings = map_source_to_capabilities(s, organization_name=org, country="Oman")
+        assert mappings, "expected the topical matches to be retained as context"
+        _no_direct_and_no_confirmed(mappings)
+
+
+def test_trend_article_naming_org_as_example_is_not_direct_evidence():
+    """A third-party trend page that names the organization only as an
+    example must not become confirmed/direct evidence merely because the
+    organization name appears next to capability terms."""
+    s = _titled_source(
+        source_type="technology",
+        url="https://vendor.example/blog/airport-technology-trends-2026",
+        title="Airport Technology Trends 2026",
+        content=(
+            "Airports like Oman Airports are deploying a security operations center and zero trust "
+            "architecture to protect OT networks. Ransomware remains a key cyber risk."
+        ),
+    )
+    for org in (_OAMC, _OA_SHORT):
+        mappings = map_source_to_capabilities(s, organization_name=org, country="Oman")
+        cyber = [m for m in mappings if m.capability_id == "cybersecurity_resilience"]
+        assert cyber, "industry context must be retained for traceability"
+        assert all(m.evidence_level == EvidenceLevel.WEAK_RELEVANCE for m in cyber)
+        _no_direct_and_no_confirmed(mappings)
+
+
+def test_first_party_short_name_reaches_direct_evidence_under_both_account_names():
+    s = _titled_source(
+        source_type="official",
+        url="https://www.omanairports.example/en/media/news/soc-launch",
+        title="Oman Airports launches cyber security operations centre",
+        content=(
+            "Oman Airports has deployed a new security operations center and zero trust architecture "
+            "at Muscat International Airport. The implementation strengthens cyber risk management."
+        ),
+    )
+    for org in (_OAMC, _OA_SHORT):
+        cyber = [
+            m for m in map_source_to_capabilities(s, organization_name=org, country="Oman")
+            if m.capability_id == "cybersecurity_resilience"
+        ]
+        assert any(m.evidence_level == EvidenceLevel.DIRECT_EVIDENCE for m in cyber), org
+        assert all(
+            m.epistemic_status == EpistemicStatus.CONFIRMED_EVIDENCE.value
+            for m in cyber if m.evidence_level == EvidenceLevel.DIRECT_EVIDENCE
+        )
+
+
+def test_full_legal_name_still_associates_and_reaches_direct_evidence():
+    s = _titled_source(
+        source_type="news",
+        url="https://news.example/business/oman-airports-zero-trust",
+        title="Oman Airports to implement zero trust architecture",
+        content=(
+            "Oman Airports Management Company is implementing a zero trust architecture and a new "
+            "security operations center, the company said on Monday."
+        ),
+    )
+    cyber = [
+        m for m in map_source_to_capabilities(s, organization_name=_OAMC, country="Oman")
+        if m.capability_id == "cybersecurity_resilience"
+    ]
+    assert any(m.evidence_level == EvidenceLevel.DIRECT_EVIDENCE for m in cyber)
+
+
+def test_body_trend_language_does_not_demote_genuine_news():
+    """The industry-context guard reads URL/title only: a genuine account
+    news item that mentions 'industry trends' in its body is unaffected."""
+    s = _titled_source(
+        source_type="news",
+        url="https://news.example/business/oman-airports-soc",
+        title="Oman Airports deploys new security operations center",
+        content=(
+            "In line with industry trends and market trends, Oman Airports has deployed a new security "
+            "operations center and zero trust architecture at Muscat International Airport."
+        ),
+    )
+    cyber = [
+        m for m in map_source_to_capabilities(s, organization_name=_OAMC, country="Oman")
+        if m.capability_id == "cybersecurity_resilience"
+    ]
+    assert any(m.evidence_level == EvidenceLevel.DIRECT_EVIDENCE for m in cyber)
+
+
+def test_generic_corporate_words_do_not_establish_organization_identity():
+    tokens = _org_core_tokens(_OAMC, country="Oman")
+    assert tokens == ["airports"]
+    for sentence in (
+        "The company's management team is deploying a security operations center.",
+        "Airports and airport management companies are deploying new systems.",
+        "Airports, management and company structures were discussed.",
+    ):
+        assert not _mentions_organization(sentence, _OAMC, tokens, country="Oman"), sentence
+    # The multi-word short form and the full legal name both still associate.
+    assert _mentions_organization("Oman Airports has deployed a new SOC.", _OAMC, tokens, country="Oman")
+    assert _mentions_organization("Oman Airports Management Company said today.", _OAMC, tokens, country="Oman")
+
+
+def test_short_name_alias_is_never_a_single_word_or_country_only():
+    assert _org_short_name(_OAMC, country="Oman") == "Oman Airports"
+    assert _org_short_name("Airports Management Company", country="Oman") is None  # would be one word
+    assert _org_short_name("Oman National Company", country="Oman") == "Oman National"
+    assert _org_short_name("Oman Group Holdings LLC", country="Oman") is None  # one word left
+    assert _org_short_name("Gulf Services International Company", country="Oman") is None  # one word left
+    assert _org_short_name("Oman Air", country="Oman") is None  # nothing to strip
+    assert _org_short_name("Meridian Ports Authority", country="Nordholm") is None
+
+
+def test_linkedin_and_executive_bio_downgrades_keep_level_and_epistemic_status_consistent():
+    profile = _titled_source(
+        source_type="business",  # deliberately mis-tagged upstream
+        url="https://om.linkedin.com/in/example-person",
+        title="Example Person - Head of IT - Oman Airports",
+        content=(
+            "Oman Airports has deployed a new security operations center and zero trust architecture. "
+            "Leading the implementation of the disaster recovery plan."
+        ),
+    )
+    bio = _titled_source(
+        source_type="official",
+        url="https://www.omanairports.example/en/leadership/cio",
+        title="Leadership",
+        content=(
+            "He is responsible for digital transformation. Before joining the company he served "
+            "in several technology roles, and he holds a degree in engineering. "
+            "Oman Airports has deployed a new security operations center and zero trust architecture."
+        ),
+    )
+    for s in (profile, bio):
+        mappings = map_source_to_capabilities(s, organization_name=_OAMC, country="Oman")
+        assert mappings
+        for m in mappings:
+            assert m.evidence_level == EvidenceLevel.WEAK_RELEVANCE
+            assert m.epistemic_status == EpistemicStatus.INFERENCE_HYPOTHESIS.value

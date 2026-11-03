@@ -131,7 +131,7 @@ def _text_from_html(html: str, limit: int = MAX_CONTENT_CHARS) -> str:
             value = re.sub(r"\\s+", " ", tag.get_text(" ", strip=True)).strip()
             if len(value) >= 25:
                 blocks.append(value)
-        text = " ".join(blocks)
+        text = "\n\n".join(blocks)
     return re.sub(r"\\s+", " ", text).strip()[:limit]
 
 
@@ -206,3 +206,8 @@ def _linkedin_reader_fallback(url: str) -> str:
     except requests.exceptions.RequestException:
         pass
     return ""
+
+
+
+
+

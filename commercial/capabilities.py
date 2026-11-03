@@ -23,6 +23,9 @@ from pathlib import Path
 from threading import Lock
 
 _CATALOG_PATH = Path(__file__).parent / "capabilities.json"
+# Signal Intelligence refinement: optional sector vocabulary packs (data),
+# merged into the catalogue's specific `keywords` at load time.
+_VOCABULARY_PATH = Path(__file__).parent / "technology_vocabulary.json"
 _lock = Lock()
 _cached_catalog: list[dict] | None = None
 
@@ -40,8 +43,40 @@ def get_catalog(*, force_reload: bool = False) -> list[dict]:
             with open(_CATALOG_PATH, "r", encoding="utf-8") as f:
                 catalog = json.load(f)
             _validate_catalog(catalog)
+            _merge_vocabulary_packs(catalog)
+            _validate_catalog(catalog)
             _cached_catalog = catalog
         return _cached_catalog
+
+
+def load_vocabulary_packs(path: Path | None = None) -> list[dict]:
+    """The sector vocabulary packs (see technology_vocabulary.json). A
+    missing file means no packs -- the catalogue is then exactly as authored."""
+    vocab_path = path or _VOCABULARY_PATH
+    if not vocab_path.exists():
+        return []
+    with open(vocab_path, "r", encoding="utf-8") as f:
+        return list(json.load(f).get("packs", []))
+
+
+def _merge_vocabulary_packs(catalog: list[dict]) -> None:
+    """Append every pack term to the matching capability's `keywords`
+    (lower-cased, de-duplicated, order preserved). Terms for a capability id
+    that is not in the loaded catalogue are ignored, so a test or operator
+    catalogue with fewer entries still loads. No sector or organization is
+    selected -- every pack applies to every account."""
+    by_id = {entry["id"]: entry for entry in catalog}
+    for pack in load_vocabulary_packs():
+        for capability_id, terms in (pack.get("terms") or {}).items():
+            entry = by_id.get(capability_id)
+            if entry is None:
+                continue
+            existing = {k.strip().lower() for k in entry["keywords"]}
+            for term in terms:
+                normalized = term.strip().lower()
+                if normalized and normalized not in existing:
+                    entry["keywords"].append(normalized)
+                    existing.add(normalized)
 
 
 def _validate_catalog(catalog: list[dict]) -> None:

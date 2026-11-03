@@ -17,6 +17,7 @@ country name appears in this file.
 from __future__ import annotations
 
 import re
+from typing import Callable
 
 from commercial.models import Signal
 from commercial.text_heuristics import is_low_trust_span, sentence_spans, span_containing
@@ -50,7 +51,9 @@ _SIGNAL_PATTERNS: list[tuple[str, re.Pattern]] = [
 ]
 
 
-def extract_signals(source: Source, *, max_signals: int = 6) -> list[Signal]:
+def extract_signals(
+    source: Source, *, max_signals: int = 6, extra_span_filter: Callable[[str], bool] | None = None
+) -> list[Signal]:
     """Scan one source's available text (content, else snippet+title) for
     generic event-type language. Purely pattern-based; no organization
     name is ever part of the pattern -- only the source's own text is
@@ -68,6 +71,24 @@ def extract_signals(source: Source, *, max_signals: int = 6) -> list[Signal]:
     (`pattern.finditer`) and the first one whose containing span is NOT
     low-trust is used; a signal type with only low-trust-span matches
     yields no Signal at all for this source, same as if it hadn't matched.
+
+    F3 (Golden Case G3, generic): `extra_span_filter`, when given, is an
+    additional per-span rejection check applied the same way as the
+    built-in `is_low_trust_span` check above -- a candidate match whose
+    containing span this callable flags is skipped, same as a low-trust
+    span is skipped. Optional and `None` by default, so every existing
+    caller (and `extract_all_signals`) is completely unaffected. This
+    exists because "first regex match per type" is a source-wide search:
+    without it, a signal type's first-in-document occurrence could sit in
+    a span that a caller's own evidence-relevance disqualifiers (vendor-
+    case-study language, a collective/government-wide claim, and so on)
+    would reject as not describing this organization's own activity --
+    permanently shadowing a later, genuine occurrence of the SAME signal
+    type in the organization's own, undisqualified sentence, which would
+    otherwise never be considered at all. The filter itself is supplied by
+    the caller (see commercial.evidence_mapping's call site) -- this
+    module defines no disqualification rules of its own and remains
+    organization- and sector-agnostic.
     """
     text = (source.content or "").strip() or f"{source.title} {source.snippet}".strip()
     if not text:
@@ -84,6 +105,8 @@ def extract_signals(source: Source, *, max_signals: int = 6) -> list[Signal]:
         for candidate in pattern.finditer(text):
             segment = span_containing(text, spans, candidate.start())
             if is_low_trust_span(segment):
+                continue
+            if extra_span_filter is not None and extra_span_filter(segment):
                 continue
             match = candidate
             break

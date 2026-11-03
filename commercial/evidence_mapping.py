@@ -35,7 +35,7 @@ from commercial.text_heuristics import (
     sentence_spans,
     span_containing,
 )
-from research.sources import SOURCE_TYPE_LINKEDIN_PROFILE, Source
+from research.sources import SOURCE_TYPE_LINKEDIN_PROFILE, SOURCE_TYPE_OFFICIAL, Source
 
 _HIGH_TRUST_SOURCE_TYPES = {"official", "technology", "procurement"}
 _MEDIUM_TRUST_SOURCE_TYPES = {"linkedin_company", "business", "news"}
@@ -188,6 +188,17 @@ _SENTENCE_ASSOCIATION_RADIUS = 1
 # fragment matching incidentally).
 _MIN_ORG_TOKEN_LEN = 3
 
+# Organization-identity hardening: generic corporate-form / organizational
+# words that appear in many unrelated organizations' names and in ordinary
+# prose ("the company's management team"). Like a country token, they do not
+# independently identify WHICH organization a sentence is about, so they are
+# excluded from token-fallback association. Closed, sector-agnostic list --
+# no organization, sector, or country name.
+_GENERIC_ORG_NAME_TOKENS = frozenset({
+    "company", "group", "holding", "holdings", "corporation", "limited",
+    "llc", "saoc", "saog", "management", "services", "international",
+})
+
 def _term_pattern(term: str) -> re.Pattern:
     return re.compile(r"\b" + re.escape(term) + r"\b", re.I)
 
@@ -236,7 +247,43 @@ def _org_core_tokens(organization_name: str, country: str | None = None) -> list
         stripped = [t for t in tokens if t not in country_tokens]
         if stripped:
             tokens = stripped
+    # Organization-identity hardening: same principle as country stripping
+    # above, with the same fallback -- if removing generic corporate words
+    # would leave nothing, keep the previous list (never more permissive).
+    distinctive = [t for t in tokens if t not in _GENERIC_ORG_NAME_TOKENS]
+    if distinctive:
+        tokens = distinctive
     return tokens
+
+
+def _org_short_name(organization_name: str, country: str | None = None) -> str | None:
+    """The organization name with trailing generic corporate words removed
+    (e.g. "Oman Airports Management Company" -> "Oman Airports"), usable as
+    an additional LITERAL, whole-phrase identity match.
+
+    Returns None unless the short form (a) differs from the full name,
+    (b) still has at least two words -- never a one-word match -- and
+    (c) still contains at least one distinctive token that is neither a
+    generic corporate word nor a country token.
+    """
+    words = organization_name.split()
+    while words and words[-1].lower().strip(".,") in _GENERIC_ORG_NAME_TOKENS:
+        words.pop()
+    if len(words) < 2:
+        return None
+    short = " ".join(words)
+    if short.lower() == organization_name.strip().lower():
+        return None
+    country_tokens = (
+        {t for t in re.findall(r"[a-z0-9]+", country.lower())} if country else set()
+    )
+    distinctive = [
+        t for t in re.findall(r"[a-z0-9]+", short.lower())
+        if len(t) >= _MIN_ORG_TOKEN_LEN and t not in _GENERIC_ORG_NAME_TOKENS and t not in country_tokens
+    ]
+    if not distinctive:
+        return None
+    return short
 
 
 def _required_org_token_hits(token_count: int) -> int:
@@ -256,12 +303,167 @@ def _required_org_token_hits(token_count: int) -> int:
     return max(2, -(-token_count // 2))  # ceil(token_count / 2), minimum 2
 
 
-def _mentions_organization(segment: str, organization_name: str, tokens: list[str]) -> bool:
+# Evidence-intelligence fix (exemplar mentions): a generic industry/vendor
+# sentence that names the account only as an EXAMPLE of a wider class --
+# "Airports such as Oman Airports are deploying a security operations
+# center", "operators like X", "including X", "X and other airports" -- is a
+# claim about the class, not about the account. Such a mention must not make
+# the sentence count as being ABOUT the organization. Generic English
+# enumeration frames only; no organization, sector or vendor names. The
+# vendor-specific "customers such as X" / "trusted by X" frames remain in
+# text_heuristics.looks_like_vendor_case_study_span.
+_EXEMPLAR_PREFIX_RE = re.compile(
+    r"(?:\bsuch\s+as|\blike|\bincluding|\bincludes?|\be\.g\.,?|\bfor\s+example,?|\bfor\s+instance,?|\bnotably)"
+    r"\s+(?:the\s+)?$",
+    re.I,
+)
+_EXEMPLAR_SUFFIX_RE = re.compile(
+    r"^\s*,?\s*(?:(?:and|or)\s+(?:other|many|several|most|some|similar)\b|among\s+others\b|and\s+the\s+like\b)",
+    re.I,
+)
+_EXEMPLAR_PREFIX_WINDOW = 24
+
+
+def _literal_org_occurrences(seg_lower: str, organization_name: str, short_name: str | None) -> list[tuple[int, int]]:
+    """Start/end offsets of every literal full-name or short-name mention in
+    `seg_lower`. A short-name hit lying inside a full-name hit is the same
+    mention and is not counted twice."""
+    full = [m.span() for m in re.finditer(re.escape(organization_name.lower()), seg_lower)]
+    out = list(full)
+    if short_name:
+        for m in re.finditer(r"\b" + re.escape(short_name.lower()) + r"\b", seg_lower):
+            if not any(s <= m.start() < e for s, e in full):
+                out.append(m.span())
+    return out
+
+
+def _is_exemplar_occurrence(seg_lower: str, start: int, end: int) -> bool:
+    before = seg_lower[max(0, start - _EXEMPLAR_PREFIX_WINDOW):start]
+    after = seg_lower[end:end + 40]
+    return bool(_EXEMPLAR_PREFIX_RE.search(before) or _EXEMPLAR_SUFFIX_RE.search(after))
+
+
+# Signal Intelligence refinement -- deterministic account aliases.
+#
+# Besides the full legal name and the multi-word short name, an account is
+# commonly referred to by the initials of its name ("Oman Airports
+# Management Company" -> "OAMC"). The acronym is DERIVED from the name
+# itself (never a lookup table, never fuzzy): the first letter of every word,
+# skipping connective words. It is matched only as an exact, upper-case,
+# whole word, and only when it has at least four letters -- two- and
+# three-letter initialisms collide with too many unrelated organizations to
+# identify an account on their own. Exemplar framing ("such as OAMC") is
+# rejected exactly as for the full name.
+_ACRONYM_SKIP_WORDS = frozenset({"and", "of", "the", "for", "&", "de", "du", "la", "le", "al"})
+_MIN_ACRONYM_LETTERS = 4
+
+
+def _org_acronym(organization_name: str) -> str | None:
+    words = [w for w in re.findall(r"[A-Za-z][A-Za-z0-9]*", organization_name or "") if w.lower() not in _ACRONYM_SKIP_WORDS]
+    acronym = "".join(w[0] for w in words).upper()
+    return acronym if len(acronym) >= _MIN_ACRONYM_LETTERS else None
+
+
+def organization_aliases(organization_name: str, country: str | None = None) -> list[str]:
+    """Every deterministic name form that identifies the account: the full
+    name, the multi-word short name, and the derived acronym."""
+    aliases = [organization_name.strip()]
+    short_name = _org_short_name(organization_name, country=country)
+    if short_name:
+        aliases.append(short_name)
+    acronym = _org_acronym(organization_name)
+    if acronym:
+        aliases.append(acronym)
+    return aliases
+
+
+def _mentions_acronym(segment: str, organization_name: str) -> bool:
+    acronym = _org_acronym(organization_name)
+    if not acronym:
+        return False
+    hits = [m.span() for m in re.finditer(r"(?<![A-Za-z0-9])" + re.escape(acronym) + r"(?![A-Za-z0-9])", segment)]
     seg_lower = segment.lower()
-    if organization_name.lower() in seg_lower:
+    return any(not _is_exemplar_occurrence(seg_lower, s, e) for s, e in hits)
+
+
+# UNDERSTAND v2 -- deterministic hashtag / compound aliases.
+#
+# Social posts write a multi-word name as one CamelCase token, usually as a
+# hashtag: "Oman Airports" -> "#OmanAirports" / "OmanAirports". The compound
+# is DERIVED from the account's own multi-word aliases (full name and short
+# name) by removing the spaces -- never a lookup table and never fuzzy. It
+# is matched case-sensitively, exactly as written in the name, as a whole
+# token: not inside a longer word, not as part of a domain name
+# ("omanairports.co.om" does not match), and not as an exemplar.
+_MIN_COMPOUND_CHARS = 8
+
+
+def compound_aliases(organization_name: str, country: str | None = None) -> list[str]:
+    out: list[str] = []
+    for alias in (organization_name.strip(), _org_short_name(organization_name, country=country)):
+        if not alias:
+            continue
+        words = re.findall(r"[A-Za-z0-9]+", alias)
+        compound = "".join(words)
+        if len(words) >= 2 and len(compound) >= _MIN_COMPOUND_CHARS and compound not in out:
+            out.append(compound)
+    return out
+
+
+def _mentions_compound_alias(segment: str, organization_name: str, country: str | None = None) -> bool:
+    seg_lower = segment.lower()
+    for compound in compound_aliases(organization_name, country=country):
+        pattern = r"(?<![A-Za-z0-9./@_-])#?" + re.escape(compound) + r"(?![A-Za-z0-9_]|\.[A-Za-z])"
+        for m in re.finditer(pattern, segment):
+            if not _is_exemplar_occurrence(seg_lower, m.start(), m.end()):
+                return True
+    return False
+
+
+def _mentions_organization(
+    segment: str, organization_name: str, tokens: list[str], *, country: str | None = None
+) -> bool:
+    if _mentions_acronym(segment, organization_name):
         return True
+    if _mentions_compound_alias(segment, organization_name, country=country):
+        return True
+    seg_lower = segment.lower()
+    # Organization-identity hardening: the multi-word short form of the name
+    # (trailing generic corporate words removed, see `_org_short_name`) is
+    # accepted as a literal whole-phrase match -- "Oman Airports" for
+    # "Oman Airports Management Company". Never a single word.
+    short_name = _org_short_name(organization_name, country=country)
+    literal = _literal_org_occurrences(seg_lower, organization_name, short_name)
+    if literal:
+        # Evidence-intelligence fix: the account is named here, but if EVERY
+        # mention is an exemplar ("such as X", "X and other ...") the
+        # sentence is about the wider class, not the account -- and the
+        # weaker token fallback below must not re-admit it.
+        return any(not _is_exemplar_occurrence(seg_lower, s, e) for s, e in literal)
+    if len(tokens) <= 1:
+        # Fix B (confirmed live false-positive class, Oman Air investigation):
+        # a single remaining core token -- typically because country-
+        # stripping in _org_core_tokens left only one word -- is too weak to
+        # trust alone: it is frequently a short, common word purely by
+        # coincidence (e.g. "air" from "Oman Air", "health" from "Star
+        # Health"). Word-boundary matching alone is not sufficient here --
+        # "air traffic" is a genuine whole-word match of "air" but is not
+        # evidence of "Oman Air" -- so when only one core token remains, only
+        # the literal full organization name (checked above) can establish
+        # association. Generic -- no organization name is referenced here,
+        # and this applies identically regardless of which word the single
+        # token happens to be. A naturally single-word organization name is
+        # unaffected: its one token IS the full name, so the check above
+        # already covers it.
+        return False
     required_token_hits = _required_org_token_hits(len(tokens))
-    return sum(1 for t in tokens if t in seg_lower) >= required_token_hits
+    # Fix B: word-boundary matching, not substring containment -- a
+    # multi-token name's individual tokens could otherwise coincidentally
+    # match inside an unrelated longer word (the same class of bug the
+    # single-token early return above addresses, at the multi-token level).
+    return sum(
+        1 for t in tokens if re.search(r"\b" + re.escape(t) + r"\b", seg_lower)
+    ) >= required_token_hits
 
 
 def _span_disqualifies_evidence(segment: str) -> bool:
@@ -365,7 +567,8 @@ def _is_organization_associated(
     # exactly the false-positive shape this excludes.
     org_sentence_idxs = {
         i for i, (s, e) in enumerate(spans)
-        if not _span_disqualifies_evidence(text[s:e]) and _mentions_organization(text[s:e], organization_name, tokens)
+        if not _span_disqualifies_evidence(text[s:e])
+        and _mentions_organization(text[s:e], organization_name, tokens, country=country)
     }
     if not org_sentence_idxs:
         return False
@@ -491,7 +694,8 @@ def _direct_evidence_locally_grounded(
 
     org_sentence_idxs = {
         i for i, (s, e) in enumerate(spans)
-        if not _span_disqualifies_evidence(text[s:e]) and _mentions_organization(text[s:e], organization_name, tokens)
+        if not _span_disqualifies_evidence(text[s:e])
+        and _mentions_organization(text[s:e], organization_name, tokens, country=country)
     }
     if not org_sentence_idxs:
         return 0
@@ -567,6 +771,29 @@ _TECHNOGRAPHICS_MARKERS = (
 _LINKEDIN_JOB_PATH_RE = re.compile(r"^/jobs/", re.I)
 
 
+# Signal Intelligence refinement: third-party company-DIRECTORY / data-
+# provider profile pages ("<Org> Employee Directory, Headcount & Staff",
+# "<Org> - Products, Competitors, Financials, Employees ...", "Top <Org>
+# Alternatives, Competitors") describe an organization from the outside in
+# templated boilerplate -- the same class as technographics: useful
+# current-state context, never evidence that the organization is buying,
+# implementing or requiring anything. Detected from URL and TITLE only
+# (never body text), so a genuine article that mentions competitors or
+# investors in passing is unaffected. Generic -- no provider or organization
+# is named.
+_DIRECTORY_PROFILE_RE = re.compile(
+    r"\b(employee directory|headcount|org chart|products,? competitors|competitors,? financials|"
+    r"alternatives,? competitors|alternatives (and|&) competitors|competitors (and|&) alternatives|"
+    r"company profile and (employees|financials)|financials,? employees)\b",
+    re.I,
+)
+
+
+def _is_directory_profile_page(source: Source) -> bool:
+    haystack = " ".join(part for part in (source.url or "", source.title or "") if part)
+    return bool(_DIRECTORY_PROFILE_RE.search(_URL_TITLE_SEPARATORS_RE.sub(" ", haystack)))
+
+
 def _is_third_party_technographics(source: Source, text: str) -> bool:
     haystack = " ".join(
         part for part in (
@@ -576,6 +803,200 @@ def _is_third_party_technographics(source: Source, text: str) -> bool:
         ) if part
     ).lower()
     return any(marker in haystack for marker in _TECHNOGRAPHICS_MARKERS)
+
+
+# Generic third-party industry / trend / best-practice / buyer's-guide pages
+# (e.g. a vendor's "airport technology trends" article) can establish topical
+# relevance, but they are not account-specific evidence that the target
+# organization is buying, implementing, planning, procuring or requiring
+# anything. Detected from the source's own URL slug and TITLE only -- never
+# from body text -- so a genuine news report or official release that merely
+# mentions "industry trends" in passing is unaffected. Closed, sector-agnostic
+# phrase set; no organization, vendor, sector or country names.
+_GENERIC_INDUSTRY_CONTENT_RE = re.compile(
+    r"\b(?:"
+    r"(?:technology|tech|industry|market|digital|innovation)\s+trends?"
+    r"|trends?\s+(?:to\s+watch|(?:(?:for|in)\s+)?(?:19|20)\d{2})"
+    r"|(?:19|20)\d{2}\s+(?:\w+\s+){0,2}trends"
+    r"|top\s+\d+\s+(?:\w+\s+){0,3}trends"
+    r"|(?:technology|industry|market)\s+(?:outlook|landscape)"
+    r"|best\s+practices"
+    r"|buyers?\s+guide"
+    r")\b",
+    re.I,
+)
+_URL_TITLE_SEPARATORS_RE = re.compile(r"[-_/.+%:|'’]+")
+
+
+# Evidence-intelligence fix: a second, broader set of URL/title shapes that
+# mark generic explainer / guidance / thought-leadership content ("Why OT
+# cyber resilience matters for aviation", "How to secure airport networks",
+# "5 ways to ...", "The future of ...", whitepapers, webinars). Unlike the
+# trend/outlook set above, these phrasings are also used by genuine account
+# stories ("How <Org> cut downtime with ..."), so this set is EXEMPTED when
+# the title or URL slug itself names the researched account as its subject
+# (see `_names_account_in_title_or_url`). Closed, sector-agnostic phrases.
+_GENERIC_EXPLAINER_CONTENT_RE = re.compile(
+    r"\b(?:"
+    r"how\s+to|how\s+can|how\s+do"
+    r"|why\s+(?:\w+\s+){0,6}matters?"
+    r"|what\s+is|what\s+are"
+    r"|(?:ultimate|complete|definitive|essential|beginner'?s?|practical)\s+guide|guide\s+to"
+    r"|checklist|tips|\d+\s+(?:ways|steps|reasons|things)|ways\s+to"
+    r"|the\s+future\s+of|the\s+rise\s+of|explained|explainer"
+    r"|white\s?paper|e-?book|webinar|thought\s+leadership|best\s+practice"
+    r"|challenges\s+(?:facing|for|of|in)"
+    r")\b",
+    re.I,
+)
+
+
+def _names_account_in_title_or_url(source: Source, organization_name: str | None, *, country: str | None = None) -> bool:
+    """True when the source's own title or URL path names the researched
+    account as its subject (never as an exemplar). A publisher titling or
+    slugging a page after the account is the clearest third-party signal
+    that the page is ABOUT the account."""
+    if not organization_name:
+        return False
+    tokens = _org_core_tokens(organization_name, country=country)
+    candidates = [source.title or ""]
+    try:
+        path = urlparse(source.url or "").path
+    except ValueError:
+        path = ""
+    if path:
+        candidates.append(_URL_TITLE_SEPARATORS_RE.sub(" ", path))
+    return any(c and _mentions_organization(c, organization_name, tokens, country=country) for c in candidates)
+
+
+def _is_generic_industry_content(
+    source: Source, *, organization_name: str | None = None, country: str | None = None
+) -> bool:
+    haystack = _URL_TITLE_SEPARATORS_RE.sub(
+        " ", " ".join(part for part in (source.url or "", source.title or "") if part)
+    )
+    if _GENERIC_INDUSTRY_CONTENT_RE.search(haystack):
+        return True
+    if _GENERIC_EXPLAINER_CONTENT_RE.search(haystack):
+        return not _names_account_in_title_or_url(source, organization_name, country=country)
+    return False
+
+
+# Evidence-intelligence fix (account-centrality gate for direct evidence).
+#
+# ROOT CAUSE of the Oman Airports "airport OT cybersecurity" false positive:
+# DIRECT_EVIDENCE was granted to ANY source in which >=1-2 capability terms
+# sat within one sentence of an account mention and a technology-event word
+# ("deploying", "upgrading") appeared nearby. Nothing asked whether the
+# SOURCE was about the account at all. Three things combined:
+#   1. the open-web "technology" discovery family labels every result
+#      source_type="technology", which `_source_trust_tier` treats as HIGH
+#      trust -- the same as the account's own website -- so a vendor blog
+#      found by that query earned a high-trust bonus (70 + 10 = 80%);
+#   2. association used a one-sentence radius, so a generic sentence
+#      ("A zero trust architecture limits lateral movement.") next to a single
+#      passing account sentence borrowed the account mention;
+#   3. an account named only as an example ("airports such as X") still
+#      counted as an account mention (fixed in `_mentions_organization`).
+# epistemic_status is a pure function of evidence_level, so every DIRECT
+# mapping became confirmed_evidence, and opportunities.py labels an
+# opportunity confirmed when its best mapping is DIRECT.
+#
+# A third-party source may therefore only yield DIRECT_EVIDENCE when it is
+# ACCOUNT-CENTRED -- decided from content + account association + source
+# context, never from the publisher's domain alone:
+#   - first-party: source_type "official" (the account's own site/domain); or
+#   - the title or URL slug names the account as its subject; or
+#   - the account is the subject of the lead (one of the first two narrative
+#     sentences) -- the standard news/announcement shape; or
+#   - the account is named in at least two distinct narrative sentences.
+# Otherwise the source is CONTEXT that mentions the account in passing: its
+# matched terms must sit in the SAME sentence as the account mention (no
+# adjacent-sentence borrowing), and the best it can reach is
+# STRONG_INFERENCE (an inference_hypothesis), never DIRECT/confirmed.
+_ACCOUNT_LEAD_SENTENCES = 2
+_ACCOUNT_MIN_NARRATIVE_MENTIONS = 2
+
+
+def _source_is_account_centred(
+    source: Source, text: str, organization_name: str | None, *, country: str | None = None
+) -> bool:
+    if not organization_name:
+        return True  # opt-in pipeline context, like every other association gate here
+    tokens = _org_core_tokens(organization_name, country=country)
+    if not tokens:
+        return True
+    if source.source_type == SOURCE_TYPE_OFFICIAL:
+        return True
+    if _names_account_in_title_or_url(source, organization_name, country=country):
+        return True
+    spans = sentence_spans(text)
+    narrative = [i for i, (s, e) in enumerate(spans) if not _span_disqualifies_evidence(text[s:e])]
+    account_idxs = [
+        i for i in narrative
+        if _mentions_organization(text[spans[i][0]:spans[i][1]], organization_name, tokens, country=country)
+    ]
+    if len(account_idxs) >= _ACCOUNT_MIN_NARRATIVE_MENTIONS:
+        return True
+    lead = set(narrative[:_ACCOUNT_LEAD_SENTENCES])
+    return any(i in lead for i in account_idxs)
+
+
+# Signal Intelligence refinement -- account context established by a page
+# TITLE.
+#
+# A page whose title names the account as its subject (e.g. "<Account>
+# issues tender for airport systems") may state the event itself without
+# repeating the account name ("The tender covers LiDAR-based boarding
+# supervision ..."). The title may then stand in for the account mention,
+# but ONLY when all of the following hold (the caller additionally requires
+# specific catalogue terms with a locally grounded technology/procurement
+# event, and caps the result at STRONG_INFERENCE -- a title can never
+# CONFIRM anything):
+#   - the title names the account (full name, short name or acronym; never
+#     as an exemplar);
+#   - the title is a single-item headline, not a listing/category page
+#     ("Latest <Account> Tenders", "<Account> Contracts", "<Account> Jobs"):
+#     a listing names the account as a TOPIC, and its entries can belong to
+#     anyone -- the motivating real case was an aggregator page titled after
+#     the account whose LiDAR/boarding-gate tender belonged to a different
+#     airport;
+#   - the event text is not one row of a multi-entry listing ("View Detail",
+#     several publication/closing dates side by side).
+# Generic: no organization, sector or country is named.
+_LISTING_TITLE_RE = re.compile(
+    r"\b(latest|tenders|contracts|bids|opportunities|jobs|vacancies|careers|directory|listings?|companies|"
+    r"results|archive|news|updates|press releases|notices|announcements|events|projects|suppliers|vendors)\b",
+    re.I,
+)
+_LISTING_ROW_RE = re.compile(r"\bview details?\b|\bclosing date\b|\bbid deadline\b", re.I)
+_DATE_STAMP_RE = re.compile(
+    r"\b\d{1,2}\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.?\s+\d{4}\b", re.I
+)
+_TITLE_EVENT_WINDOW = 300
+
+
+def _headline_part(title: str) -> str:
+    """The headline part of a page title, without a trailing " | Site"
+    publisher suffix (which often contains words like "News")."""
+    return re.split(r"\s+[|\u2014\u2013]\s+", title or "", maxsplit=1)[0]
+
+
+def looks_like_listing_row(text: str) -> bool:
+    return bool(_LISTING_ROW_RE.search(text or "")) or len(_DATE_STAMP_RE.findall(text or "")) >= 2
+
+
+def title_establishes_account_context(
+    title: str, event_text: str, organization_name: str | None, *, country: str | None = None
+) -> bool:
+    if not organization_name or not title:
+        return False
+    tokens = _org_core_tokens(organization_name, country=country)
+    if not _mentions_organization(title, organization_name, tokens, country=country):
+        return False
+    if _LISTING_TITLE_RE.search(_headline_part(title)):
+        return False
+    return not looks_like_listing_row(event_text)
 
 
 def _is_linkedin_job_url(url: str) -> bool:
@@ -712,7 +1133,8 @@ def _generic_trigger_is_ambiguous(trigger_term: str) -> bool:
 
 
 def _locally_supported_by_context_terms(
-    text: str, trigger_terms: list[str], context_terms: list[str], *, radius: int = _SENTENCE_ASSOCIATION_RADIUS
+    text: str, trigger_terms: list[str], context_terms: list[str], *, radius: int = _SENTENCE_ASSOCIATION_RADIUS,
+    also_exclude_terms: tuple[str, ...] = (),
 ) -> bool:
     """Evidence-relevance hardening, follow-up pass (Area 4): does at least
     one occurrence of one of `trigger_terms` have one of `context_terms`
@@ -733,6 +1155,14 @@ def _locally_supported_by_context_terms(
     reference data describing what IT/infrastructure language looks like
     for that specific capability -- never a new hardcoded list of
     industries, companies, or sectors to exclude.
+
+    `also_exclude_terms` (F2b): additional term(s), typically the specific
+    keyword(s) that already qualified the calling promotion branch, whose
+    own matched text is excluded from the context search exactly like the
+    trigger's own matched text already is -- see `_correlating_signal_has_
+    tech_context`'s docstring for why this matters (a multi-word keyword
+    can otherwise contain one of the capability's own context words and
+    trivially "corroborate" itself).
     """
     if not context_terms:
         return False
@@ -760,6 +1190,24 @@ def _locally_supported_by_context_terms(
                     break
     if not trigger_sentence_idxs:
         return False
+
+    # F2b (Golden Case G3 -- self-corroboration hole, generic): a caller may
+    # pass terms that are already "spent" -- typically the SAME term(s) that
+    # qualified the promotion branch calling this function -- so that an
+    # occurrence of a context term overlapping one of THOSE terms' own
+    # matched text is excluded too, exactly like a trigger's own matched
+    # text is excluded above. Without this, a multi-word capability keyword
+    # that itself CONTAINS one of the capability's own context words (e.g.
+    # the keyword "transport network" contains network_connectivity's own
+    # weak-signal term "network") can "corroborate" itself: the same three
+    # words are being counted twice, not two independent pieces of
+    # evidence. This is the general form of the same principle already
+    # applied to `trigger_terms` above -- no organization, sector, or
+    # specific phrase pair is hardcoded; any caller-supplied exclusion term
+    # is treated identically.
+    for _excl_term in also_exclude_terms:
+        for _excl_match in _term_pattern(_excl_term).finditer(text):
+            trigger_match_spans.append((_excl_match.start(), _excl_match.end()))
 
     for term in context_terms:
         for match in _term_pattern(term).finditer(text):
@@ -799,20 +1247,66 @@ def _usable_generic_hits(text: str, generic_hits: list[str], capability: dict) -
     return usable
 
 
+# F2c -- closed-class, domain-independent prepositions used to distinguish a
+# keyword occurrence functioning as the direct grammatical OBJECT of an
+# action ("investment IN X", "contract awarded FOR X") from one functioning
+# as a SCOPE/coverage modifier ("collaboration ACROSS X", "partnership
+# COVERING X"). This is ordinary English function-word grammar -- the same
+# fixed list applies to every organization, sector, and capability; it is
+# never a rule about any specific word, phrase, or industry. Unknown/
+# unlisted prepositions fail closed (treated as neither target nor scope,
+# so the fallback simply does not apply -- never as an implicit target).
+_TARGET_PREPOSITIONS = frozenset({"in", "into", "toward", "towards", "for", "on"})
+_SCOPE_PREPOSITIONS = frozenset({"across", "covering", "spanning", "throughout", "over", "within"})
+# Simple determiners/modifiers skipped when walking back from the keyword's
+# own match to find the preposition governing it -- e.g. "investment in
+# ADDITIONAL compute capacity" must still see "in", not "additional".
+_SKIPPABLE_MODIFIERS = frozenset({
+    "a", "an", "the", "its", "their", "his", "her", "our", "your",
+    "additional", "new", "major", "further", "own", "planned", "recent",
+})
+_SKIP_WALK_LIMIT = 3
+
+
+def _keyword_is_object_of_target_preposition(text: str, keyword_match_start: int) -> bool:
+    """True if the word immediately governing the keyword occurrence at
+    `keyword_match_start` (skipping up to `_SKIP_WALK_LIMIT` simple
+    determiners/modifiers) is a target preposition, and False if it is a
+    scope preposition or anything else (fail-closed for unrecognized
+    words -- this never treats silence as a target).
+    """
+    preceding_words = re.findall(r"[A-Za-z]+", text[:keyword_match_start])
+    i = len(preceding_words) - 1
+    skipped = 0
+    while i >= 0 and preceding_words[i].lower() in _SKIPPABLE_MODIFIERS and skipped < _SKIP_WALK_LIMIT:
+        i -= 1
+        skipped += 1
+    if i < 0:
+        return False
+    governing_word = preceding_words[i].lower()
+    if governing_word in _SCOPE_PREPOSITIONS:
+        return False
+    return governing_word in _TARGET_PREPOSITIONS
+
+
 def _correlating_signal_has_tech_context(
     text: str, signal: Signal, capability: dict, *, exclude_terms: list[str]
 ) -> bool:
-    """False-positive-class fix (generic-strategy-article finding): a signal
-    that merely CORRELATES with technology need (see
-    `_CORRELATING_ONLY_SIGNAL_TYPES`) -- as opposed to describing one
-    directly (`_TECH_EVENT_SIGNAL_TYPES`) -- may still ground a promotion,
-    but only when this capability's own context vocabulary (keywords +
+    """False-positive-class fix (generic-strategy-article finding, extended
+    by F2 for Golden Case G3): a signal that merely CORRELATES with
+    technology need -- as opposed to describing one directly
+    (`_TECH_EVENT_SIGNAL_TYPES`) -- may still ground a promotion, but only
+    when this capability's own context vocabulary (keywords +
     weak_signal_terms) is independently, locally present near the SIGNAL's
     own matched text: "This expansion will require additional network
     capacity" locally corroborates an otherwise-generic "expansion" with
-    network_connectivity's own weak-signal term "network". A signal type
-    outside `_CORRELATING_ONLY_SIGNAL_TYPES` (a genuine technology event) is
-    entirely unaffected by this check and always returns True.
+    network_connectivity's own weak-signal term "network". Only a genuine
+    technology-EVENT signal (`_TECH_EVENT_SIGNAL_TYPES`) is entirely
+    unaffected by this check and always returns True -- every other signal
+    type requires corroboration, fail-closed, whether or not it is also a
+    member of the narrower `_CORRELATING_ONLY_SIGNAL_TYPES` set (which
+    exists only for Rule 4's separate ambiguous-generic-trigger path, not
+    this one).
 
     `exclude_terms` -- the trigger/keyword term(s) that already qualified
     this capability for the promotion branch being evaluated (`usable_
@@ -824,18 +1318,83 @@ def _correlating_signal_has_tech_context(
     always trivially find it sitting next to the signal, defeating the
     corroboration requirement entirely.
 
+    F2c (Golden Case regression fix -- "investment in additional compute
+    capacity" must still promote): the independent-context search above can
+    find nothing when the ONLY candidate context term is a substring of the
+    qualifying keyword's own text -- e.g. "compute capacity" contains
+    data_centre_infrastructure's own weak_signal_term "compute", so F2b's
+    overlap exclusion correctly removes it as self-corroboration. This is
+    not a rare edge case: most multi-word catalogue keywords are built from
+    [a modifier] + [the capability's own weak_signal_term] (compute
+    capacity, cloud migration, server infrastructure, it outsourcing...),
+    so an unqualified signal paired with a single such keyword can never
+    satisfy the independent-context check on its own, regardless of
+    whether the keyword genuinely describes the organization's own
+    technology decision or is an unrelated homonym (network_connectivity's
+    "transport network" -- also transport-and-logistics network, not IT
+    networking -- has the identical shape and must NOT promote).
+
+    Lexical vocabulary cannot tell these two apart -- "compute capacity"
+    and "transport network" are equally specific catalogue keywords, at
+    the same word-distance from their signal. What DOES distinguish them
+    is closed-class English grammar: "investment IN compute capacity"
+    names the keyword as the direct grammatical OBJECT of the signal via a
+    TARGET preposition, while "collaboration ACROSS their transport
+    network" names it as a SCOPE/coverage modifier via a different,
+    equally closed-class preposition. `_keyword_is_object_of_target_
+    preposition` checks only this: a small, fixed, domain-independent set
+    of prepositions, identical for every organization, sector, and
+    capability -- never a rule about a specific word, phrase, or industry.
+    Falls back to this ONLY when the independent-context check above found
+    nothing, and ONLY for terms that are genuine catalogue `keywords` --
+    never for a `generic_triggers` term (Rule 4's `usable_generic_hits`),
+    which is deliberately ambiguous by design and must keep requiring
+    independent corroboration; loosening it here would reopen exactly the
+    class of false positive that gate exists to prevent.
+
     Reuses the exact mechanism already built for ambiguous generic triggers
     (`_locally_supported_by_context_terms`) -- no new taxonomy, no new
     signal vocabulary, no organization/sector/country branching.
     """
-    if signal.signal_type not in _CORRELATING_ONLY_SIGNAL_TYPES:
+    # F2 (Golden Case G3 -- fail-closed signal gating, generic): the prior
+    # condition ("not in _CORRELATING_ONLY_SIGNAL_TYPES") meant any signal
+    # type NOT EXPLICITLY in the narrow {expansion, project} correlating
+    # set was trusted with no corroboration check at all -- including
+    # `partnership`, `investment`, and `contract_award` (all members of
+    # `_QUALIFYING_SIGNAL_TYPES`, used by this same single-hit fallback,
+    # but never added to `_CORRELATING_ONLY_SIGNAL_TYPES`). A partnership/
+    # MOU announcement is exactly as generic as a bare "expansion" mention
+    # -- neither one, by itself, says anything about technology -- so it
+    # deserves the identical local-corroboration requirement. Gating is now
+    # fail-closed: only a genuine, specific technology EVENT signal
+    # (`_TECH_EVENT_SIGNAL_TYPES`) is trusted without a corroboration
+    # check; every other signal type -- present today or added later --
+    # must independently demonstrate local technology context. This is a
+    # generic signal-type check, not a rule about any specific signal,
+    # organization, or phrase.
+    if signal.signal_type in _TECH_EVENT_SIGNAL_TYPES:
         return True
     exclude = {t.strip().lower() for t in exclude_terms}
     context_terms = [
         t for t in (list(capability["keywords"]) + list(capability.get("weak_signal_terms", [])))
         if t.strip().lower() not in exclude
     ]
-    return _locally_supported_by_context_terms(text, signal.matched_terms, context_terms)
+    if _locally_supported_by_context_terms(
+        text, signal.matched_terms, context_terms, also_exclude_terms=tuple(exclude_terms)
+    ):
+        return True
+
+    # F2c fallback (see docstring above): only reached when no independent
+    # context term exists. Scoped to genuine catalogue keywords only -- a
+    # generic_triggers term (Rule 4's usable_generic_hits) never qualifies.
+    catalogue_keywords = {k.strip().lower() for k in capability.get("keywords", [])}
+    for term in exclude_terms:
+        if term.strip().lower() not in catalogue_keywords:
+            continue
+        for match in _term_pattern(term).finditer(text):
+            if _keyword_is_object_of_target_preposition(text, match.start()):
+                return True
+    return False
 
 
 def map_source_to_capabilities(
@@ -875,7 +1434,7 @@ def map_source_to_capabilities(
     # Phase 1E: distinguish third-party current-state technographics from
     # genuine organizational technology/project evidence. The former remains
     # useful evidence, but can never be promoted to a sales-requirement tier.
-    is_technographics = _is_third_party_technographics(source, text)
+    is_technographics = _is_third_party_technographics(source, text) or _is_directory_profile_page(source)
     is_linkedin_job = _is_linkedin_job_url(source.url)
     # Robust to upstream misclassification (see the H3.1 explanation above
     # `_is_linkedin_personal_profile_url`): a personal profile is a
@@ -883,6 +1442,18 @@ def map_source_to_capabilities(
     is_linkedin_profile = (
         source.source_type == SOURCE_TYPE_LINKEDIN_PROFILE or _is_linkedin_personal_profile_url(source.url)
     )
+    # Generic third-party industry/trend content (URL/title only -- see
+    # `_is_generic_industry_content`) is context, never account-specific
+    # buying evidence: routed through Rule 0 below. LinkedIn sources keep
+    # their own Rule 1 treatment.
+    is_generic_industry_content = (
+        not is_linkedin_job and not is_linkedin_profile
+        and _is_generic_industry_content(source, organization_name=organization_name, country=country)
+    )
+    # Evidence-intelligence fix: is this source ABOUT the account, or context
+    # that mentions it in passing? See `_source_is_account_centred`.
+    account_centred = _source_is_account_centred(source, text, organization_name, country=country)
+    association_radius = _SENTENCE_ASSOCIATION_RADIUS if account_centred else 0
 
     # Evidence-relevance hardening (recommendation #6): generic executive
     # biography/interview content gets the same stakeholder_context
@@ -912,7 +1483,13 @@ def map_source_to_capabilities(
     if is_linkedin_profile or is_executive_bio_source:
         trust_tier = "low"
 
-    signals = extract_signals(source)
+    # F3 (Golden Case G3): pass this module's own span disqualifier so a
+    # signal type's first-in-document match is never taken from a span
+    # (vendor-case-study, customer-requirement, collective-scope, or
+    # non-narrative chrome) that this module would itself reject as not
+    # describing the organization's own activity -- see extract_signals'
+    # docstring for why this matters.
+    signals = extract_signals(source, extra_span_filter=_span_disqualifies_evidence)
     qualifying_signal = next((s for s in signals if s.signal_type in _QUALIFYING_SIGNAL_TYPES), None)
     # The narrower "did something concrete actually happen with technology
     # here" signal, used to gate direct_evidence (item 2/3 of Phase 1C-H2).
@@ -943,7 +1520,7 @@ def map_source_to_capabilities(
         # not establish a customer buying requirement. Keep the match as
         # weak_relevance so it remains traceable without feeding the AI
         # "opportunity" path.
-        if is_technographics or is_vendor_case_study:
+        if is_technographics or is_vendor_case_study or is_generic_industry_content:
             matched = direct_hits + weak_hits + generic_hits
             if not matched:
                 continue
@@ -952,7 +1529,16 @@ def map_source_to_capabilities(
                 level, trust_tier="low", direct_count=0,
                 weak_or_generic_count=len(matched), signal_backed=False,
             )
-            cluster_reason = "technographics" if is_technographics else "vendor_case_study"
+            cluster_reason = (
+                "technographics" if is_technographics
+                else "vendor_case_study" if is_vendor_case_study
+                else "industry_context"
+            )
+            rule0_category = (
+                EvidenceCategory.INDUSTRY_CONTEXT
+                if cluster_reason == "industry_context"
+                else EvidenceCategory.CURRENT_STATE_TECHNOLOGY
+            )
             out.append(
                 CapabilityMapping(
                     capability_id=capability["id"],
@@ -967,7 +1553,7 @@ def map_source_to_capabilities(
                     technology_requirement=capability["capability"],
                     signal_type=None,
                     incumbent_context=incumbent_terms,
-                    evidence_category=EvidenceCategory.CURRENT_STATE_TECHNOLOGY.value,
+                    evidence_category=rule0_category.value,
                     inference_cluster_id=_cluster_id(source.url, capability["id"], cluster_reason),
                     epistemic_status=epistemic_status_for(level).value,
                 )
@@ -1080,8 +1666,12 @@ def map_source_to_capabilities(
         # DIFFERENT fact, not evidence that this particular term reflects a
         # real technology event.
         if direct_hits:
-            org_associated = _is_organization_associated(text, direct_hits, organization_name, country=country)
-            grounded_term_count = _direct_evidence_locally_grounded(text, direct_hits, organization_name, country=country)
+            org_associated = _is_organization_associated(
+                text, direct_hits, organization_name, radius=association_radius, country=country
+            )
+            grounded_term_count = _direct_evidence_locally_grounded(
+                text, direct_hits, organization_name, country=country, radius=association_radius
+            )
             tech_event_locally_grounded = tech_event_signal is not None and _signal_locally_associated_with_trigger(
                 text, direct_hits, tech_event_signal
             )
@@ -1132,6 +1722,29 @@ def map_source_to_capabilities(
                 level = EvidenceLevel.STRONG_INFERENCE
             else:
                 level = EvidenceLevel.WEAK_RELEVANCE
+            # Signal Intelligence refinement: a single-item page titled
+            # after the account, describing a specific technology/
+            # procurement event that does not repeat the account name. See
+            # `title_establishes_account_context`. Never above
+            # STRONG_INFERENCE: the account link rests on the title.
+            title_associated = False
+            if (
+                level == EvidenceLevel.WEAK_RELEVANCE and not org_associated and not is_customer_product_page
+                and tech_event_locally_grounded
+            ):
+                window = text[
+                    max(0, tech_event_signal.match_start - _TITLE_EVENT_WINDOW):
+                    tech_event_signal.match_end + _TITLE_EVENT_WINDOW
+                ]
+                if title_establishes_account_context(source.title or "", window, organization_name, country=country):
+                    level = EvidenceLevel.STRONG_INFERENCE
+                    title_associated = True
+            # Evidence-intelligence fix: only an account-centred source can
+            # CONFIRM anything. A context source that names the account in
+            # passing keeps its (same-sentence, signal-backed) mapping as an
+            # inference to validate -- it is reclassified, not dropped.
+            if level == EvidenceLevel.DIRECT_EVIDENCE and not account_centred:
+                level = EvidenceLevel.STRONG_INFERENCE
             confidence = _confidence_for(
                 level, trust_tier=trust_tier, direct_count=len(direct_hits), weak_or_generic_count=len(direct_hits),
                 signal_backed=tech_event_locally_grounded or qualifying_signal_locally_grounded,
@@ -1162,6 +1775,9 @@ def map_source_to_capabilities(
                 # meaning of BUSINESS_SIGNAL_INFERENCE.
                 category = (
                     EvidenceCategory.EXISTING_CAPABILITY_CONTEXT if existing_capability_only
+                    else EvidenceCategory.PROCUREMENT_SIGNAL if title_associated and (
+                        tech_event_signal.signal_type == "procurement_activity" or source.source_type == "procurement"
+                    )
                     else EvidenceCategory.BUSINESS_SIGNAL_INFERENCE
                 )
             else:
@@ -1356,7 +1972,8 @@ def map_source_to_capabilities(
     if is_linkedin_profile or is_executive_bio_source:
         out = [
             m if m.evidence_level == EvidenceLevel.WEAK_RELEVANCE else _dataclass_replace(
-                m, evidence_level=EvidenceLevel.WEAK_RELEVANCE, confidence=min(m.confidence, 35.0)
+                m, evidence_level=EvidenceLevel.WEAK_RELEVANCE, confidence=min(m.confidence, 35.0),
+                epistemic_status=epistemic_status_for(EvidenceLevel.WEAK_RELEVANCE).value,
             )
             for m in out
         ]

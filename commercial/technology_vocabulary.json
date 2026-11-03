@@ -1,0 +1,20 @@
+{
+  "_about": "Sector vocabulary packs (Signal Intelligence refinement). DATA ONLY: each pack lists specific technology terms and the existing Otech capability they evidence. commercial/capabilities.py merges every pack into the catalogue's `keywords` at load time, for every account -- there is no sector detection and no organization name anywhere. A term listed here is treated exactly like any other specific catalogue keyword: it can only strengthen evidence through the existing evidence rules (account association, a locally grounded technology/procurement event, industry-context and LinkedIn guards). Add a pack, or terms to a pack, without touching code.",
+  "packs": [
+    {
+      "id": "operational_technology_iot",
+      "description": "Operational-technology / IoT sensing and messaging systems (any sector).",
+      "terms": {
+        "network_connectivity": ["mqtt", "lidar", "iot gateway", "iot sensors", "sensor network", "operational technology network"],
+        "enterprise_managed_services": ["api integration", "sensor-based supervision"]
+      }
+    },
+    {
+      "id": "aviation_systems",
+      "description": "Airport operational systems.",
+      "terms": {
+        "enterprise_managed_services": ["airport systems", "airport operational database", "boarding gate", "boarding gates", "baggage handling system", "passenger processing system"]
+      }
+    }
+  ]
+}

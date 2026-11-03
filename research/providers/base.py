@@ -31,6 +31,12 @@ class RawResult:
     provider: str        # "serper" | "openrouter_parallel" | ...
     rank: int             # 0-based position in the provider's result set
     published_at: str | None = None  # provider-supplied publication date when available
+    # Provider "extra excerpts" (Brave `extra_snippets`): other passages from
+    # the same PAGE, not part of the result's own description. Kept separate
+    # from `snippet` so consumers can use them as context/discovery material
+    # without treating them as the result's own statement (People association
+    # never uses them as employment evidence). Empty for providers without it.
+    extra_snippets: list[str] = field(default_factory=list)
 
 
 class ProviderError(Exception):
@@ -62,6 +68,10 @@ class QueryOutcome:
     results: list[RawResult] = field(default_factory=list)
     error: str | None = None
     elapsed_seconds: float = 0.0
+    # Optional paging metadata (People discovery). Providers that do not
+    # page leave the defaults; None = the provider did not say.
+    page: int = 0
+    more_results_available: bool | None = None
 
     @property
     def ok(self) -> bool:

@@ -72,6 +72,30 @@ def _independently_qualifying(mappings: list[CapabilityMapping]) -> list[Capabil
     return [m for m in mappings if m.evidence_category != EvidenceCategory.EXISTING_CAPABILITY_CONTEXT.value]
 
 
+# Evidence-intelligence fix (defense in depth): an opportunity may only be
+# labeled confirmed_evidence when its strongest mapping is DIRECT_EVIDENCE of
+# an ACCOUNT-EVENT kind -- the organization's own technology event or a
+# procurement signal. evidence_mapping.py already only produces DIRECT
+# mappings of those two categories from account-centred sources; this guard
+# makes the invariant structural here too, so a future rule (or a mapping
+# built elsewhere) carrying a context category -- industry context,
+# current-state technology, stakeholder/hiring context, incidental mention,
+# customer-requirement or existing-capability context, or an inference --
+# can never make an opportunity "confirmed" on its own. Such an opportunity is
+# kept, scored as before, and labeled honestly as an inference hypothesis.
+# A legacy mapping with no category (hand-built, pre-Phase-2) is unaffected.
+_CONFIRMABLE_CATEGORIES = {
+    EvidenceCategory.ORGANIZATIONAL_TECHNOLOGY_EVENT.value,
+    EvidenceCategory.PROCUREMENT_SIGNAL.value,
+}
+
+
+def _confirms_account_evidence(m: CapabilityMapping) -> bool:
+    return m.evidence_level == EvidenceLevel.DIRECT_EVIDENCE and (
+        m.evidence_category is None or m.evidence_category in _CONFIRMABLE_CATEGORIES
+    )
+
+
 def _domain_of(url: str | None) -> str:
     if not url:
         return ""
@@ -259,13 +283,17 @@ def build_opportunity_hypotheses(mappings: list[CapabilityMapping], *, max_items
             f"({best.confidence:.0f}/100 confidence)."
         )
         incumbent = sorted({term for m in group for term in m.incumbent_context})
+        if best.evidence_level == EvidenceLevel.DIRECT_EVIDENCE and not _confirms_account_evidence(best):
+            label_level = EvidenceLevel.STRONG_INFERENCE
+        else:
+            label_level = best.evidence_level
         out.append(
             OpportunityHypothesis(
                 capability_id=cid,
                 capability_name=c["name"],
                 priority=_priority(score),
                 score=score,
-                evidence_level=best.evidence_level.value,
+                evidence_level=label_level.value,
                 confidence=best.confidence,
                 evidence_count=len(group),
                 independent_source_count=len(unique_urls),
@@ -278,7 +306,7 @@ def build_opportunity_hypotheses(mappings: list[CapabilityMapping], *, max_items
                 incumbent_context=incumbent,
                 independent_domain_count=domain_count,
                 inference_cluster_count=cluster_count,
-                epistemic_status=epistemic_status_for(best.evidence_level).value,
+                epistemic_status=epistemic_status_for(label_level).value,
             )
         )
 

@@ -29,11 +29,13 @@ from commercial.evidence_mapping import map_all_sources, summarize_by_capability
 from commercial.incumbents import detect_all_incumbent_evidence
 from commercial.opportunities import build_opportunity_hypotheses
 from commercial.models import CapabilityMapping, IncumbentEvidence, Signal
+from commercial.people import Person, assess_people
 from commercial.signals import extract_all_signals
 from commercial.text_heuristics import clean_evidence_excerpt
 from research.acquisition import AcquisitionRun
 from research.analysis.qualification import QualificationResult, qualify_corpus
 from research.analysis.evidence_gate import evaluate_evidence
+from research.identity import build_identity
 
 
 @dataclass
@@ -49,11 +51,28 @@ class AccountRadarReport:
     capability_mappings: list[CapabilityMapping] = field(default_factory=list)
     incumbent_evidence: list[IncumbentEvidence] = field(default_factory=list)
     opportunity_hypotheses: list = field(default_factory=list)
+    # People / Stakeholder Intelligence (additive; see commercial.people).
+    # Computed independently of the general-corpus qualification outcome
+    # above -- LinkedIn person discovery is a separate data source from the
+    # official/technology/procurement/business/news corpus qualify_corpus
+    # assesses, so a thin/insufficient general corpus does not imply no
+    # People were found, and vice versa. Defaults to an empty list so
+    # existing callers/tests constructing AccountRadarReport without
+    # `people` continue to work unchanged.
+    people: list[Person] = field(default_factory=list)
+    # Candidates whose CURRENT employment at the organization could not be
+    # confirmed (bare brand, conflicting evidence, location conflict, ...).
+    # Never counted as stakeholders; each carries `verification_reasons`.
+    unverified_people: list[Person] = field(default_factory=list)
 
     # Acquisition-stage diagnostics carried through so the report is
     # self-contained (a reader doesn't need the separate acquisition JSON
     # to understand how much/what kind of evidence underlies it).
     acquisition_diagnostics: dict = field(default_factory=dict)
+    # Account identity (research.identity.OrganizationIdentity.to_dict()):
+    # name, country, verified official domains and logo -- deterministic and
+    # separate from research evidence.
+    identity: dict = field(default_factory=dict)
 
     @property
     def sources(self):
@@ -162,6 +181,9 @@ class AccountRadarReport:
                 for i in self.incumbent_evidence
             ],
             "acquisition_diagnostics": self.acquisition_diagnostics,
+            "people": [p.to_dict() for p in self.people],
+            "unverified_people": [p.to_dict() for p in self.unverified_people],
+            "identity": dict(self.identity),
         }
 
 
@@ -178,6 +200,35 @@ def build_report(run: AcquisitionRun) -> AccountRadarReport:
     """
     qualification = qualify_corpus(run.sources)
 
+    # People / Stakeholder Intelligence: derived ONLY from the LinkedIn
+    # profile candidates already present in run.sources (AcquisitionRun
+    # exposes only a flat `sources` list -- the local `linkedin_result`/
+    # `profile_candidates` objects used inside run_acquisition() are not
+    # attached to the returned AcquisitionRun -- so candidates are
+    # identified here by their own retained source_type ==
+    # "linkedin_profile", set on each Source by research.linkedin.
+    # discover_linkedin and preserved through dedup).
+    # Deliberately built from run.sources, NOT qualification.qualified_
+    # sources: qualify_source's MIN_USABLE_TEXT_CHARS floor is tuned for
+    # general web-page evidence and would incorrectly exclude the large
+    # majority of legitimate LinkedIn candidates, whose only text is a
+    # short search-result headline snippet (e.g. "IT Manager", 10 chars;
+    # "Director", 8 chars) -- well under that bar despite being perfectly
+    # usable classification evidence for the People module's own purposes.
+    # This is intentionally independent of corpus_status for the same
+    # reason: see the `people` field's own docstring on AccountRadarReport.
+    linkedin_profile_sources = [
+        s for s in run.sources
+        if s.source_type == "linkedin_profile"
+    ]
+    people_result = assess_people(
+        linkedin_profile_sources,
+        organization_name=run.organization.name,
+        organization_country=run.organization.country,
+    )
+    people = people_result.confirmed
+    unverified_people = people_result.unverified
+
     if qualification.corpus_status == "insufficient_evidence":
         return AccountRadarReport(
             organization_name=run.organization.name,
@@ -185,7 +236,10 @@ def build_report(run: AcquisitionRun) -> AccountRadarReport:
             website=run.organization.website,
             linkedin_company_url=run.organization.linkedin_company_url,
             qualification=qualification,
+            people=people,
+            unverified_people=unverified_people,
             acquisition_diagnostics=run.diagnostics.to_dict(),
+            identity=build_identity(run.organization, run.sources).to_dict(),
         )
 
     qualified_sources = qualification.qualified_sources
@@ -212,5 +266,8 @@ def build_report(run: AcquisitionRun) -> AccountRadarReport:
         capability_mappings=capability_mappings,
         incumbent_evidence=incumbent_evidence,
         opportunity_hypotheses=opportunity_hypotheses,
+        people=people,
+        unverified_people=unverified_people,
         acquisition_diagnostics=run.diagnostics.to_dict(),
+        identity=build_identity(run.organization, run.sources).to_dict(),
     )

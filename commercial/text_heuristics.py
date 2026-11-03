@@ -347,12 +347,36 @@ _VENDOR_CASE_STUDY_MARKERS_RE = re.compile(
     r"|\bcase stud(y|ies)\b"
     r"|\b(a|one of our|our) (recent |previous |past )?(client|customer)s?\b"
     r"|\bin (a|our) (recent|previous) (engagement|project|implementation) (with|for)\b"
-    r"|\bfor (our|a) (client|customer)\b",
+    r"|\bfor (our|a) (client|customer)\b"
+    # F1 (Golden Case G1 -- generic, not organization-specific): a vendor
+    # page can name a real customer WITHOUT any first-person delivery
+    # narrative at all -- a bare "trusted by <org>" logo-strip caption, or
+    # "customers such as <org>" / "clients like <org>" listing sentence.
+    # These carry no case-study claim of their own; they exist purely to
+    # associate the organization's name with whatever generic
+    # product/marketing content sits nearby. The prior marker set only
+    # covered first-person PAST-DELIVERY phrasing ("we helped", "our
+    # client") -- it never covered this equally common, purely
+    # NAME-DROPPING frame, which is why a page could name a customer this
+    # way and still have that mention treated as ordinary organizational
+    # narrative for locality purposes. No organization name, sector, or
+    # vendor is referenced here -- these are generic marketing-copy frames
+    # used industry-wide.
+    r"|\btrusted by\b"
+    r"|\b(customers?|clients?)\s+(such as|like|including)\b",
     re.I,
 )
 
 
 def looks_like_vendor_case_study_span(segment: str) -> bool:
+    """True if `segment` reads as vendor-authored language ABOUT a
+    (named or unnamed) customer -- either a first-person past-delivery
+    narrative ("we helped X..."), or a name-dropping/customer-listing
+    frame ("trusted by X", "customers such as X") -- rather than the
+    customer's own first-party statement. Either shape means the
+    organization's name in this span is not evidence that the span
+    describes the organization's own current activity.
+    """
     if not segment:
         return False
     return bool(_VENDOR_CASE_STUDY_MARKERS_RE.search(segment))

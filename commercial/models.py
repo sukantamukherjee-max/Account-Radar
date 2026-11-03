@@ -22,7 +22,7 @@ class EvidenceLevel(str, Enum):
     score, so a viewer can see WHY something is trusted or not.
     """
 
-    DIRECT_EVIDENCE = "direct_evidence"     # the source explicitly describes this capability area in an organizational context
+    DIRECT_EVIDENCE = "direct_evidence"     # an ACCOUNT-SPECIFIC source explicitly describes this capability area as the organization's own event/requirement (see evidence_mapping._source_is_account_centred)
     STRONG_INFERENCE = "strong_inference"     # a real business signal (project/expansion/investment/...) implies this technology requirement, but no direct capability mention
     WEAK_RELEVANCE = "weak_relevance"           # an isolated/incidental keyword match; retained as evidence, never as a sales claim
 
@@ -47,6 +47,7 @@ class EvidenceCategory(str, Enum):
     INCIDENTAL_MENTION = "incidental_mention"                                     # a bare weak/generic term with no corroborating signal or organizational association
     CUSTOMER_REQUIREMENT_CONTEXT = "customer_requirement_context"                   # evidence-relevance hardening follow-up pass: the matched term's local context describes a THIRD PARTY's (the organization's own customer's) requirement, need, or site criteria -- not the organization's own requirement. Useful as contextual/current-state evidence; never promotable to an opportunity.
     EXISTING_CAPABILITY_CONTEXT = "existing_capability_context"                       # Current/Change/Requirement Signal Gate: two or more specific catalogue terms are locally grounded to the organization, but no local current/change/requirement signal was found -- the source establishes the org HAS or DESCRIBES this capability area, not that anything is changing. Retained as visible, explainable context; never independently promotable to an opportunity (see commercial/opportunities.py).
+    INDUSTRY_CONTEXT = "industry_context"                                                 # Evidence-intelligence fix: generic third-party industry / trend / explainer / thought-leadership content (detected from the source's URL and title). Explains WHY a capability may be relevant to the sector; never account-specific evidence, never direct_evidence, never confirmed_evidence.
 
 
 class EpistemicStatus(str, Enum):

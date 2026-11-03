@@ -86,6 +86,19 @@ class FamilyOutcome:
         return [r.provider for r in self.runs if r.used]
 
     @property
+    def provider_requests(self) -> dict[str, int]:
+        """Queries actually sent to each provider in this family (approximate
+        API consumption). Queries refused locally because the provider is
+        not configured cost nothing and are not counted."""
+        out: dict[str, int] = {}
+        for run in self.runs:
+            if run.used:
+                sent = sum(1 for o in run.outcomes if not (o.error or "").endswith("not configured"))
+                if sent:
+                    out[run.provider] = out.get(run.provider, 0) + sent
+        return out
+
+    @property
     def errors(self) -> list[str]:
         out = []
         for run in self.runs:
@@ -130,7 +143,8 @@ def acquire_family(
 ) -> FamilyOutcome:
     """Run one named query family through the primary provider; escalate to
     the next configured provider only if the family-level coverage
-    assessment says the primary was genuinely sparse or unavailable.
+    assessment says the primary was genuinely sparse or unavailable, and
+    continue down the chain only while the family remains sparse.
     """
     coverage_fn = coverage_fn or default_coverage_assessment
     if not providers:
@@ -153,6 +167,10 @@ def acquire_family(
     fallback_reason = None
 
     if assessment.sparse and len(providers) > 1:
+        # Ordered fallback chain (e.g. Brave -> Tavily -> Serper). Each
+        # fallback is tried only while the family is STILL sparse by the same
+        # family-level rule: a healthy fallback ends the chain, so a provider
+        # is never called "just in case" and API usage is not inflated.
         for fallback in providers[1:]:
             if not fallback.is_configured():
                 runs.append(ProviderFamilyRun(provider=fallback.name, outcomes=[], used=False))
@@ -160,8 +178,9 @@ def acquire_family(
             fallback_outcomes = _run_queries(fallback, queries, num_results=num_results, max_workers=max_workers)
             runs.append(ProviderFamilyRun(provider=fallback.name, outcomes=fallback_outcomes, used=True))
             fallback_triggered = True
-            fallback_reason = assessment.reason
-            break  # one fallback attempt is enough; do not cascade through every provider
+            fallback_reason = fallback_reason or assessment.reason
+            if not coverage_fn(fallback_outcomes).sparse:
+                break  # this fallback covered the family; stop here
 
     return FamilyOutcome(
         family=family,
