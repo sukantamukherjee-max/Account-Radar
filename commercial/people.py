@@ -723,19 +723,36 @@ def assess_people(
     result = PeopleResult()
     for group in deduplicate_profile_sources(profile_candidates):
         primary = max(group, key=lambda s: s.source_quality)
-        candidate_name = _name_from_title(primary.title)
 
         # Zones A + B: every result's own title/snippet for this profile URL.
         zone_ab = [(s.title or "", s.snippet or "") for s in sorted(group, key=lambda s: s is not primary)]
+
+        # Ignore profiles with no usable title or snippet.
+        if not any(t or sn for t, sn in zone_ab):
+            continue
+
+        # Validate the candidate name only after confirming usable profile text.
+        candidate_name = _name_from_title(primary.title)
+        if not candidate_name:
+            result.rejected.append({
+                "name": "",
+                "url": primary.url,
+                "reasons": ["Could not extract a reliable person's name from the profile title"],
+            })
+            continue
+
         # Zone C: context only.
         context: list[str] = []
         for s in group:
-            for snip in [*(s.extra.get("supplemental_snippets") or []), *(s.extra.get("extra_snippets") or [])]:
+            snippets = (
+                (s.extra.get("supplemental_snippets") or [])
+                + (s.extra.get("extra_snippets") or [])
+            )
+            for snip in snippets:
                 if snip and snip not in context and snip != s.snippet:
                     context.append(snip)
 
-        if not any(t or sn for t, sn in zone_ab):
-            continue
+
         assessment = assess_results(
             zone_ab, organization_name, organization_country=organization_country,
             candidate_name=candidate_name or None,
@@ -870,7 +887,49 @@ def build_people(
     ).confirmed
 
 
+
 def _name_from_title(title: str) -> str:
+    """Extract a plausible person's name from a LinkedIn result title.
+
+    LinkedIn titles commonly follow:
+    Name – Headline – Company | LinkedIn
+
+    Never use a role description or company description as a person's name.
+    """
+    if not title:
+        return ""
+
+    candidate = title.strip()
+
+    for sep in (" - ", " – ", " | ", " — "):
+        if sep in candidate:
+            candidate = candidate.split(sep, 1)[0].strip()
+            break
+
+    if not candidate:
+        return ""
+
+    role_words = {
+        "head", "director", "chief", "officer", "manager",
+        "engineer", "analyst", "specialist", "consultant",
+        "architect", "administrator", "president", "vice",
+        "lead", "executive", "founder", "coordinator",
+        "supervisor", "developer", "technician", "security",
+        "technology", "digital", "telecom", "telecommunications",
+        "information", "infrastructure", "operations",
+        "finance", "marketing", "human", "resources",
+    }
+
+    tokens = candidate.lower().replace(",", " ").split()
+
+    if any(token.strip(".,:;()") in role_words for token in tokens):
+        return ""
+
+    if any(word in tokens for word in ("at", "for", "of")):
+        return ""
+
+    return candidate
+
     """LinkedIn search-result titles are conventionally "Name - Headline -
     Company | LinkedIn" or "Name | LinkedIn". Take the text before the
     first separator as the name; fall back to the whole title if no

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from commercial.people import (
     Person,
+    _name_from_title,
     assess_organization_association,
     build_people,
     classify_person_text,
@@ -384,3 +385,23 @@ def test_taxonomy_loads_and_has_expected_top_level_categories():
     assert len(taxonomy["roles"]) > 0
     assert len(taxonomy["functions"]) > 0
     assert len(taxonomy["technology_areas"]) > 0
+def test_name_from_title_rejects_role_description():
+    result = _name_from_title("Head of IT at Acme Telecom Oman")
+    assert result == ""
+
+
+def test_name_from_title_preserves_real_person_name():
+    result = _name_from_title("John Smith - CTO - Ooredoo Oman")
+    assert result == "John Smith"
+def test_build_people_rejects_role_description_as_candidate_name():
+    sources = [
+        _source(
+            url="https://www.linkedin.com/in/role-only-profile",
+            title="Head of IT at Acme Telecom Oman",
+            snippet="Chief Information Officer",
+        )
+    ]
+
+    people = build_people(sources, organization_name=ORG_NAME)
+
+    assert people == []

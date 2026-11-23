@@ -306,3 +306,16 @@ def test_target_group_entity_matches_group_but_not_a_country_company():
 def test_unrelated_company_mention_is_not_employment():
     a = _assess_one("Q R - IT Director - Unrelated Telecom | LinkedIn", "Muscat, Oman. Ooredoo Oman is a competitor.")
     assert a.status == REJECTED
+
+def test_current_title_with_former_advisor_statement_needs_verification():
+    a = _assess_one(
+        "Candidate Alpha - CTO - Ooredoo Oman | LinkedIn",
+        "Former CTO at Ooredoo Oman. Now advisor.",
+    )
+    assert a.status == NEEDS_VERIFICATION
+def test_current_title_with_ex_cio_open_to_work_needs_verification():
+    a = _assess_one(
+        "Candidate Beta - Chief Information Officer - Ooredoo Oman | LinkedIn",
+        "ex-Chief Information Officer at Ooredoo Oman. Open to work.",
+    )
+    assert a.status == NEEDS_VERIFICATION

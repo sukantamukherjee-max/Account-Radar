@@ -614,9 +614,33 @@ def assess_results(
     ended_structured = [c for c in out.claims if c.entity == TARGET and c.temporal == "historical"
                         and c.provenance == P_EXPERIENCE_LIST]
 
+    historical_target_free_text = [
+        c for c in out.claims
+        if c.entity == TARGET
+        and c.temporal == "historical"
+        and c.provenance != P_EXPERIENCE_LIST
+    ]
+
     if target:
         conflicts = sibling + competing
-        if conflicts:
+
+        current_target = [
+            c for c in out.claims
+            if c.entity == TARGET and c.temporal == "current"
+        ]
+
+        if current_target and historical_target_free_text:
+            out.status = NEEDS_VERIFICATION
+            out.reasons.append(
+                "conflicting current and historical employment statements: "
+                + "; ".join(c.describe() for c in historical_target_free_text)
+            )
+            out.evidence.extend(
+                c.evidence_line() for c in current_target + historical_target_free_text
+            )
+
+        elif conflicts:
+
             out.status = NEEDS_VERIFICATION
             out.reasons.append("conflicting current-employer evidence: " + "; ".join(c.describe() for c in conflicts))
             out.evidence.extend(c.evidence_line() for c in target)
