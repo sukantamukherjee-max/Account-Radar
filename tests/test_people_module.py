@@ -497,3 +497,17 @@ def test_identity_annotation_normalises_diacritics_and_phd_credentials():
                          "https://www.linkedin.com/in/jose-garcia-2")
     annotate_identity([a, b])
     assert "possible_identity_collision" in a.identity_flags
+
+
+def test_identity_annotation_does_not_flag_same_name_same_target_org_with_different_titles():
+    # organization_name is the target account label assigned to every Person
+    # by assess_people(); it is not independent evidence of shared identity.
+    a = _identity_person("alex-1", "Alex Morgan", "Alex Morgan - Head of IT",
+                         "https://www.linkedin.com/in/alex-morgan-1")
+    b = _identity_person("alex-2", "Alex Morgan", "Alex Morgan - Finance Director",
+                         "https://www.linkedin.com/in/alex-morgan-2")
+    annotate_identity([a, b])
+    assert not a.identity_flags
+    assert not b.identity_flags
+    assert not a.possible_duplicate_of
+    assert not b.possible_duplicate_of

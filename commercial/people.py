@@ -900,7 +900,8 @@ def _identity_name_key(value: str) -> str:
         char for char in unicodedata.normalize("NFKD", value)
         if not unicodedata.combining(char)
     )
-    value = re.sub(r"\b(?:dr|mr|mrs|ms|prof)\.?\s+", "", value)
+    value = re.sub(r"^(?:mr|mrs|ms|miss|dr|prof)\.?\s+", "", value)
+    value = re.sub(r"\bph\s*\.?\s*d\.?(?=$|[\s,;])", "", value)
     # Handle both PhD and common punctuated forms such as Ph.D.
     value = re.sub(r"\bph\s*\.?\s*d\.?\b", "", value)
     value = re.sub(r"\b(?:pmp|mba|cissp|cism|cisa|itil|prince2|pe|eng)\b", "", value)
@@ -920,15 +921,26 @@ def _identity_name_key(value: str) -> str:
 
 
 def _identity_title_key(person: Person) -> str:
-    title = (person.current_title or "").casefold()
-    name = (person.name or "").casefold()
+    title = _identity_name_key(
+        person.current_title or ""
+    )
+    name = _identity_name_key(person.name or "")
+
     if name:
-        title = re.sub(re.escape(name), " ", title, count=1)
-    title = re.sub(r"\blinkedin\b", " ", title)
-    title = re.sub(r"[^a-z0-9]+", " ", title)
+        title = re.sub(
+            r"(?<!\w)" + re.escape(name) + r"(?!\w)",
+            " ",
+            title,
+        )
+
     org = _identity_name_key(person.organization_name)
     if org:
-        title = re.sub(r"\b" + re.escape(org) + r"\b", " ", title)
+        title = re.sub(
+            r"(?<!\w)" + re.escape(org) + r"(?!\w)",
+            " ",
+            title,
+        )
+
     return " ".join(title.split())
 
 
@@ -965,11 +977,10 @@ def annotate_identity(people: list[Person]) -> None:
             same_title = bool(_identity_title_key(left)) and (
                 _identity_title_key(left) == _identity_title_key(right)
             )
-            left_org = _identity_name_key(left.organization_name)
-            right_org = _identity_name_key(right.organization_name)
-            # Missing organisation data is not evidence that two people
-            # belong to the same organisation.
-            same_org = bool(left_org and right_org and left_org == right_org)
+            # `organization_name` is the target account supplied to
+            # assess_people(), not independently extracted employer evidence.
+            # It therefore cannot distinguish two people within that account
+            # and must never be used as identity evidence.
             related_slugs = _related_identity_slugs(left, right)
             locations_conflict = bool(
                 left.location and right.location
@@ -979,7 +990,7 @@ def annotate_identity(people: list[Person]) -> None:
             if same_title and related_slugs and not locations_conflict:
                 flag = "likely_same_profile_alternate_url"
                 note = "Likely the same profile: normalised name and title match, and LinkedIn slugs are closely related."
-            elif same_org or same_title:
+            elif same_title:
                 flag = "possible_identity_collision"
                 note = "Same name detected across different profile URLs; verify whether these are distinct people."
                 if locations_conflict:
