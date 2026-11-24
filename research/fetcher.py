@@ -54,19 +54,53 @@ def _looks_like_login_wall(text: str) -> bool:
 
 
 _BOILERPLATE_CLASS_RE = re.compile(
-    r"(?:^|[-_\\s])(nav|navigation|navbar|menu|mega-menu|breadcrumb|breadcrumbs|"
+    r"(?:^|[-_\s])(nav|navigation|navbar|menu|mega-menu|breadcrumb|breadcrumbs|"
     r"header|footer|sidebar|side-bar|cookie|consent|social|share|search|"
     r"pagination|pager|related|recommend|newsletter|subscribe|popup|modal|"
-    r"advert|ads|banner)(?:$|[-_\\s])", re.I,
+    r"advert|ads|banner)(?:$|[-_\s])", re.I,
 )
+
+# Elements that are, or wrap, the page's main content are never removed as
+# boilerplate, whatever their attributes say. Sites routinely put layout
+# words on wrappers (WordPress <body class="has-sidebar header-fixed">, a
+# <div class="article-header"> holding the H1), and removing such a wrapper
+# would delete the very content the extractor exists to keep.
+_PROTECTED_TAGS = frozenset({"html", "body", "main", "article"})
+_PROTECTED_DESCENDANTS = ("main", "article", "h1")
+
+
+def _attribute_text(tag) -> str:
+    """id / class / role / aria-label as one space-separated string.
+    BeautifulSoup returns multi-valued attributes such as class as a list;
+    those are joined with spaces (str() of the list would yield
+    "['footer', 'clearfix']", which no word boundary can match)."""
+    parts: list[str] = []
+    for attr in ("id", "class", "role", "aria-label"):
+        value = tag.get(attr)
+        if not value:
+            continue
+        if isinstance(value, (list, tuple)):
+            parts.extend(str(v) for v in value if v)
+        else:
+            parts.append(str(value))
+    return " ".join(parts)
+
+
+def _is_protected_content_node(tag) -> bool:
+    if tag.name in _PROTECTED_TAGS:
+        return True
+    if str(tag.get("role", "") or "").lower() == "main":
+        return True
+    return tag.find(_PROTECTED_DESCENDANTS) is not None or tag.find(attrs={"role": "main"}) is not None
+
 
 def _is_boilerplate_node(tag) -> bool:
     if not getattr(tag, "name", None):
         return False
-    attrs = " ".join(str(tag.get(a, "") or "") for a in ("id", "class", "role", "aria-label"))
-    if _BOILERPLATE_CLASS_RE.search(attrs):
-        return True
-    return str(tag.get("role", "") or "").lower() in {"navigation", "banner", "contentinfo", "complementary"}
+    is_boilerplate = bool(_BOILERPLATE_CLASS_RE.search(_attribute_text(tag))) or (
+        str(tag.get("role", "") or "").lower() in {"navigation", "banner", "contentinfo", "complementary"}
+    )
+    return is_boilerplate and not _is_protected_content_node(tag)
 
 def _extract_published_at(html: str) -> str | None:
     soup = BeautifulSoup(html, "html.parser")
@@ -115,12 +149,15 @@ def _text_from_html(html: str, limit: int = MAX_CONTENT_CHARS) -> str:
     for tag in soup(["script", "style", "noscript", "svg", "template", "form", "nav", "footer", "header", "aside"]):
         tag.decompose()
     for tag in list(soup.find_all(True)):
+        # A tag inside an already-removed boilerplate block is gone with it.
+        if getattr(tag, "decomposed", False):
+            continue
         if _is_boilerplate_node(tag):
             tag.decompose()
 
     candidates = []
     for tag in soup.find_all(["article", "main"]):
-        text = re.sub(r"\\s+", " ", tag.get_text(" ", strip=True)).strip()
+        text = re.sub(r"\s+", " ", tag.get_text(" ", strip=True)).strip()
         if len(text) >= 120:
             candidates.append(text)
     if candidates:
@@ -128,11 +165,21 @@ def _text_from_html(html: str, limit: int = MAX_CONTENT_CHARS) -> str:
     else:
         blocks = []
         for tag in soup.find_all(["h1", "h2", "h3", "p", "li", "blockquote", "figcaption"]):
-            value = re.sub(r"\\s+", " ", tag.get_text(" ", strip=True)).strip()
+            value = re.sub(r"\s+", " ", tag.get_text(" ", strip=True)).strip()
             if len(value) >= 25:
                 blocks.append(value)
         text = "\n\n".join(blocks)
-    return re.sub(r"\\s+", " ", text).strip()[:limit]
+    return _normalize_whitespace(text)[:limit]
+
+
+def _normalize_whitespace(text: str) -> str:
+    """Collapse runs of spaces/tabs to one space and never allow more than one
+    blank line, while KEEPING the "\\n\\n" separators between paragraph and
+    list blocks (downstream evidence logic relies on those boundaries)."""
+    text = re.sub(r"[^\S\n]+", " ", text)
+    text = re.sub(r" ?\n ?", "\n", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
 
 
 def published_at_for_url(url: str) -> str | None:
