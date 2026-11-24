@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from commercial.people import (
     Person,
+    annotate_identity,
     _name_from_title,
     assess_organization_association,
     build_people,
@@ -405,3 +406,94 @@ def test_build_people_rejects_role_description_as_candidate_name():
     people = build_people(sources, organization_name=ORG_NAME)
 
     assert people == []
+
+
+
+def _identity_person(person_id, name, title, url, location=None, organization=ORG_NAME):
+    return Person(
+        person_id=person_id,
+        name=name,
+        current_title=title,
+        organization_name=organization,
+        organization_association="confirmed",
+        linkedin_url=url,
+        location=location,
+    )
+
+
+def test_identity_annotation_flags_related_slug_alternate_profile_without_merging():
+    a = _identity_person("jane-doe", "Jane Doe", "Jane Doe - Head of IT - Meridian Ports Authority",
+                         "https://www.linkedin.com/in/jane-doe")
+    b = _identity_person("jane-doe-4a1b2c3", "Jane Doe", "Jane Doe - Head of IT - Meridian Ports Authority",
+                         "https://www.linkedin.com/in/jane-doe-4a1b2c3")
+    annotate_identity([a, b])
+    assert a.identity_flags == ["likely_same_profile_alternate_url"]
+    assert a.possible_duplicate_of == ["jane-doe-4a1b2c3"]
+    assert b.possible_duplicate_of == ["jane-doe"]
+
+
+def test_identity_annotation_flags_same_name_collision_as_weaker_verification():
+    a = _identity_person("jane-doe-1", "Jane Doe", "Jane Doe - Head of IT - Meridian Ports Authority",
+                         "https://www.linkedin.com/in/jane-doe-1")
+    b = _identity_person("jane-doe-2", "Jane Doe", "Jane Doe - Head of IT - Meridian Ports Authority",
+                         "https://www.linkedin.com/in/jane-doe-2")
+    annotate_identity([a, b])
+    assert "possible_identity_collision" in a.identity_flags
+    assert a.possible_duplicate_of == ["jane-doe-2"]
+
+
+def test_identity_annotation_normalises_honorific_credentials_and_al_joining():
+    a = _identity_person("sara-1", "Dr. Sara Khan", "Dr. Sara Khan - CIO",
+                         "https://www.linkedin.com/in/sara-1")
+    b = _identity_person("sara-2", "Sara Khan, PMP", "Sara Khan, PMP - CIO",
+                         "https://www.linkedin.com/in/sara-2")
+    annotate_identity([a, b])
+    assert "possible_identity_collision" in a.identity_flags
+
+
+def test_identity_annotation_does_not_match_synthetic_numbered_names():
+    a = _identity_person("person-1", "Person 1", "Person 1 - Manager",
+                         "https://www.linkedin.com/in/person-1")
+    b = _identity_person("person-2", "Person 2", "Person 2 - Manager",
+                         "https://www.linkedin.com/in/person-2")
+    annotate_identity([a, b])
+    assert not a.identity_flags
+    assert not b.identity_flags
+
+
+def test_identity_fields_are_serialized_with_empty_defaults():
+    p = _identity_person("john-smith", "John Smith", "John Smith - Manager",
+                         "https://www.linkedin.com/in/john-smith")
+    data = p.to_dict()
+    assert data["identity_flags"] == []
+    assert data["possible_duplicate_of"] == []
+    assert data["identity_notes"] == []
+
+
+def test_identity_annotation_does_not_match_same_name_when_org_and_title_differ():
+    a = _identity_person("alex-1", "Alex Morgan", "Alex Morgan - Head of IT - Meridian Ports",
+                         "https://www.linkedin.com/in/alex-morgan-1", organization="Meridian Ports")
+    b = _identity_person("alex-2", "Alex Morgan", "Alex Morgan - Finance Director - Gulf Logistics",
+                         "https://www.linkedin.com/in/alex-morgan-2", organization="Gulf Logistics")
+    annotate_identity([a, b])
+    assert not a.identity_flags
+    assert not b.identity_flags
+
+
+def test_identity_annotation_does_not_treat_missing_organisations_as_equal():
+    a = _identity_person("sam-1", "Sam Taylor", "Sam Taylor - Head of IT",
+                         "https://www.linkedin.com/in/sam-taylor-1", organization="")
+    b = _identity_person("sam-2", "Sam Taylor", "Sam Taylor - Finance Director",
+                         "https://www.linkedin.com/in/sam-taylor-2", organization="")
+    annotate_identity([a, b])
+    assert not a.identity_flags
+    assert not b.identity_flags
+
+
+def test_identity_annotation_normalises_diacritics_and_phd_credentials():
+    a = _identity_person("jose-1", "José García, Ph.D.", "José García - CIO",
+                         "https://www.linkedin.com/in/jose-garcia-1")
+    b = _identity_person("jose-2", "Jose Garcia", "Jose Garcia - CIO",
+                         "https://www.linkedin.com/in/jose-garcia-2")
+    annotate_identity([a, b])
+    assert "possible_identity_collision" in a.identity_flags

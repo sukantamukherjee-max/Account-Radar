@@ -33,6 +33,7 @@ constraint on the taxonomy file itself):
 from __future__ import annotations
 
 import re
+import unicodedata
 from dataclasses import dataclass, field
 from urllib.parse import urlparse
 
@@ -68,6 +69,9 @@ class Person:
     source_urls: list[str] = field(default_factory=list)
     source_types: list[str] = field(default_factory=list)
     location: str | None = None
+    identity_flags: list[str] = field(default_factory=list)
+    possible_duplicate_of: list[str] = field(default_factory=list)
+    identity_notes: list[str] = field(default_factory=list)
 
     seniority: str | None = None  # "c_level" | "director" | "head" | "manager" | None
     functions: list[str] = field(default_factory=list)  # function ids, e.g. ["cybersecurity", "it"]
@@ -112,6 +116,9 @@ class Person:
             "source_urls": self.source_urls,
             "source_types": self.source_types,
             "location": self.location,
+            "identity_flags": self.identity_flags,
+            "possible_duplicate_of": self.possible_duplicate_of,
+            "identity_notes": self.identity_notes,
             "seniority": self.seniority,
             "functions": self.functions,
             "technology_areas": self.technology_areas,
@@ -865,9 +872,128 @@ def assess_people(
         )
         (result.confirmed if association == "confirmed" else result.unverified).append(person)
 
+    annotate_identity(result.confirmed + result.unverified)
+
     for bucket in (result.confirmed, result.unverified):
         bucket.sort(key=lambda p: (-p.relevance_score, -p.confidence, p.name.lower()))
     return result
+
+
+
+# ---------------------------------------------------------------------------
+# Cross-URL identity annotation. This is deliberately separate from
+# employment association, scoring and same-slug source deduplication.
+# ---------------------------------------------------------------------------
+
+_IDENTITY_HONORIFICS = {"dr", "mr", "mrs", "ms", "prof"}
+_IDENTITY_CREDENTIALS = {
+    "pmp", "mba", "phd", "ph.d", "cissp", "cism", "cisa", "ciso",
+    "itil", "prince2", "pe", "eng",
+}
+
+
+def _identity_name_key(value: str) -> str:
+    """Conservative deterministic name normalisation; no fuzzy matching."""
+    value = (value or "").casefold()
+    # Canonically decompose accents so José / Jose compare consistently.
+    value = "".join(
+        char for char in unicodedata.normalize("NFKD", value)
+        if not unicodedata.combining(char)
+    )
+    value = re.sub(r"\b(?:dr|mr|mrs|ms|prof)\.?\s+", "", value)
+    # Handle both PhD and common punctuated forms such as Ph.D.
+    value = re.sub(r"\bph\s*\.?\s*d\.?\b", "", value)
+    value = re.sub(r"\b(?:pmp|mba|cissp|cism|cisa|itil|prince2|pe|eng)\b", "", value)
+    value = re.sub(r"[^a-z0-9]+", " ", value)
+    tokens = [t for t in value.split() if t]
+    # Treat Al-Balushi / Al Balushi / Albalushi as the same token sequence.
+    joined = []
+    i = 0
+    while i < len(tokens):
+        if tokens[i] == "al" and i + 1 < len(tokens):
+            joined.append("al" + tokens[i + 1])
+            i += 2
+        else:
+            joined.append(tokens[i])
+            i += 1
+    return " ".join(joined)
+
+
+def _identity_title_key(person: Person) -> str:
+    title = (person.current_title or "").casefold()
+    name = (person.name or "").casefold()
+    if name:
+        title = re.sub(re.escape(name), " ", title, count=1)
+    title = re.sub(r"\blinkedin\b", " ", title)
+    title = re.sub(r"[^a-z0-9]+", " ", title)
+    org = _identity_name_key(person.organization_name)
+    if org:
+        title = re.sub(r"\b" + re.escape(org) + r"\b", " ", title)
+    return " ".join(title.split())
+
+
+def _identity_slug_base(person: Person) -> str:
+    slug = (_profile_slug(person.linkedin_url) or "").casefold()
+    # Remove a trailing hex/numeric suffix only when it is a distinct suffix.
+    return re.sub(r"-[0-9a-f]{4,}$", "", slug)
+
+
+def _related_identity_slugs(left: Person, right: Person) -> bool:
+    raw_a = (_profile_slug(left.linkedin_url) or "").casefold()
+    raw_b = (_profile_slug(right.linkedin_url) or "").casefold()
+    a, b = _identity_slug_base(left), _identity_slug_base(right)
+    return bool(
+        raw_a and raw_b and raw_a != raw_b
+        and (a == b or a.startswith(b + "-") or b.startswith(a + "-"))
+    )
+
+
+def annotate_identity(people: list[Person]) -> None:
+    """Annotate possible cross-URL identity collisions without merging records."""
+    for person in people:
+        person.identity_flags = []
+        person.possible_duplicate_of = []
+        person.identity_notes = []
+
+    for i, left in enumerate(people):
+        left_name = _identity_name_key(left.name)
+        if not left_name:
+            continue
+        for right in people[i + 1:]:
+            if left is right or left_name != _identity_name_key(right.name):
+                continue
+            same_title = bool(_identity_title_key(left)) and (
+                _identity_title_key(left) == _identity_title_key(right)
+            )
+            left_org = _identity_name_key(left.organization_name)
+            right_org = _identity_name_key(right.organization_name)
+            # Missing organisation data is not evidence that two people
+            # belong to the same organisation.
+            same_org = bool(left_org and right_org and left_org == right_org)
+            related_slugs = _related_identity_slugs(left, right)
+            locations_conflict = bool(
+                left.location and right.location
+                and _identity_name_key(left.location) != _identity_name_key(right.location)
+            )
+
+            if same_title and related_slugs and not locations_conflict:
+                flag = "likely_same_profile_alternate_url"
+                note = "Likely the same profile: normalised name and title match, and LinkedIn slugs are closely related."
+            elif same_org or same_title:
+                flag = "possible_identity_collision"
+                note = "Same name detected across different profile URLs; verify whether these are distinct people."
+                if locations_conflict:
+                    note += " Different locations make a duplicate less certain."
+            else:
+                continue
+
+            for person, other in ((left, right), (right, left)):
+                if flag not in person.identity_flags:
+                    person.identity_flags.append(flag)
+                if other.person_id not in person.possible_duplicate_of:
+                    person.possible_duplicate_of.append(other.person_id)
+                if note not in person.identity_notes:
+                    person.identity_notes.append(note)
 
 
 def build_people(
