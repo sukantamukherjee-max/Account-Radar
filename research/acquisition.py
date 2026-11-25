@@ -18,7 +18,7 @@ from research.fetcher import fetch_page, published_at_for_url
 from research.linkedin import LinkedInDiscoveryResult, discover_linkedin
 from research.organization import OrganizationInput, ResolvedOrganization, resolve_organization
 from research.providers.base import SearchProvider
-from research.providers.router import FamilyOutcome
+from research.providers.router import FamilyOutcome, provider_health_scope
 from research.sources import (
     AccessStatus,
     Source,
@@ -221,6 +221,18 @@ def run_acquisition(
     providers: list[SearchProvider],
     *,
     fetch_general: bool = True,
+) -> AcquisitionRun:
+    # One run = one provider-health scope: every provider starts healthy and
+    # nothing learned here survives the run, even if it raises.
+    with provider_health_scope():
+        return _run_acquisition(account, providers, fetch_general=fetch_general)
+
+
+def _run_acquisition(
+    account: OrganizationInput,
+    providers: list[SearchProvider],
+    *,
+    fetch_general: bool,
 ) -> AcquisitionRun:
     started = time.monotonic()
     family_diagnostics: list[FamilyDiagnostic] = []

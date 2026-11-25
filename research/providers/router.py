@@ -10,13 +10,28 @@ struggled -- it errored out, returned nothing at all, or is unconfigured.
 This module has no knowledge of LinkedIn, organizations, or any other
 business concept. It only knows how to run a batch of query strings against
 an ordered list of providers and report what happened, honestly.
+
+Run-level provider health (opt-in, see provider_health_scope): inside one
+acquisition run, a provider whose WHOLE query family failed for a reason
+that will not clear within the run -- rejected key or exhausted quota
+(HTTP 401/402/403, Tavily 432/433), or rate limiting (HTTP 429) when a
+configured fallback follows it -- is skipped for the rest of that run, so
+every later family goes straight to the fallback instead of paying the same
+failure (and its retries and backoff) again. Timeouts, network errors, 5xx,
+malformed responses and partial failures never trip it. Outside a scope the
+router keeps no memory between families, exactly as before.
 """
 
 from __future__ import annotations
 
+import re
+import threading
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass, field
-from typing import Callable
+from typing import Callable, Iterator
 
 from research.providers.base import QueryOutcome, RawResult, SearchProvider
 
@@ -51,6 +66,79 @@ def default_coverage_assessment(outcomes: list[QueryOutcome]) -> CoverageAssessm
     if len(unique_urls) == 0:
         return CoverageAssessment(True, "primary provider returned zero unique results across the whole family", metrics)
     return CoverageAssessment(False, "primary provider coverage looks healthy", metrics)
+
+
+# ---------------------------------------------------------------------------
+# Run-level provider health
+# ---------------------------------------------------------------------------
+
+_HTTP_STATUS_RE = re.compile(r"^HTTP (\d{3}):")
+# Failures that will not clear within one run: rejected key / no access
+# (401, 403), exhausted quota or plan (402; Tavily 432, 433).
+_UNRECOVERABLE_STATUS = frozenset({"401", "402", "403", "432", "433"})
+_RATE_LIMIT_STATUS = "429"
+
+
+class _RunHealth:
+    """Providers taken out of service for the rest of ONE acquisition run.
+    Keyed by provider object identity; the object is held so its id cannot
+    be reused while the run is alive. Lock-protected so a scope stays
+    consistent even if families are ever run from several threads."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._tripped: dict[int, tuple[object, str]] = {}
+
+    def reason(self, provider: SearchProvider) -> str | None:
+        with self._lock:
+            entry = self._tripped.get(id(provider))
+        return entry[1] if entry else None
+
+    def trip(self, provider: SearchProvider, reason: str) -> None:
+        with self._lock:
+            self._tripped.setdefault(id(provider), (provider, reason))
+
+
+_RUN_HEALTH: ContextVar[_RunHealth | None] = ContextVar("account_radar_provider_health", default=None)
+
+
+@contextmanager
+def provider_health_scope() -> Iterator[None]:
+    """One acquisition run. Every provider starts healthy when the scope is
+    entered, and everything learned is discarded when it exits -- normally
+    or through an exception -- so nothing leaks into the next run, even when
+    the same provider objects are reused (batch scripts). Context-local:
+    concurrent runs (e.g. separate Streamlit sessions, each on its own
+    thread) never see each other's state."""
+    token = _RUN_HEALTH.set(_RunHealth())
+    try:
+        yield
+    finally:
+        _RUN_HEALTH.reset(token)
+
+
+def _trip_reason(outcomes: list[QueryOutcome], *, has_fallback: bool) -> str | None:
+    """Why this provider should be skipped for the rest of the run, or None.
+    Only when EVERY query in the family failed, and every failure is an
+    unrecoverable status -- or HTTP 429, if a configured fallback exists."""
+    if not outcomes or any(o.ok for o in outcomes):
+        return None
+    statuses: list[str] = []
+    for outcome in outcomes:
+        match = _HTTP_STATUS_RE.match(outcome.error or "")
+        status = match.group(1) if match else None
+        if status in _UNRECOVERABLE_STATUS or (status == _RATE_LIMIT_STATUS and has_fallback):
+            statuses.append(status)
+        else:
+            return None  # timeout, transport, 5xx, malformed, unexpected, not configured ...
+    return f"HTTP {Counter(statuses).most_common(1)[0][0]}"
+
+
+def _skipped_outcomes(provider: SearchProvider, queries: list[str], reason: str) -> list[QueryOutcome]:
+    return [
+        QueryOutcome(query=q, provider=provider.name, error=f"skipped: unavailable earlier in this run ({reason})")
+        for q in queries
+    ]
 
 
 @dataclass
@@ -157,12 +245,35 @@ def acquire_family(
             coverage=CoverageAssessment(True, "no providers configured for this run", {}),
         )
 
+    health = _RUN_HEALTH.get()
+
+    def has_fallback_after(index: int) -> bool:
+        return any(p.is_configured() and not (health and health.reason(p)) for p in providers[index + 1:])
+
+    def observe(index: int, outcomes: list[QueryOutcome]) -> None:
+        if health is not None:
+            reason = _trip_reason(outcomes, has_fallback=has_fallback_after(index))
+            if reason:
+                health.trip(providers[index], reason)
+
     runs: list[ProviderFamilyRun] = []
     primary = providers[0]
-    primary_outcomes = _run_queries(primary, queries, num_results=num_results, max_workers=max_workers)
-    runs.append(ProviderFamilyRun(provider=primary.name, outcomes=primary_outcomes, used=True))
-
-    assessment = coverage_fn(primary_outcomes)
+    skip_reason = health.reason(primary) if health else None
+    if skip_reason:
+        # Taken out of service earlier in this run: no request is sent, the
+        # run is recorded as not used (so provider_requests, providers_used
+        # and errors are unaffected) and the family goes straight to fallback.
+        skipped = _skipped_outcomes(primary, queries, skip_reason)
+        runs.append(ProviderFamilyRun(provider=primary.name, outcomes=skipped, used=False))
+        assessment = CoverageAssessment(
+            True, f"{primary.name} skipped: unavailable earlier in this run ({skip_reason})",
+            coverage_fn(skipped).metrics,
+        )
+    else:
+        primary_outcomes = _run_queries(primary, queries, num_results=num_results, max_workers=max_workers)
+        runs.append(ProviderFamilyRun(provider=primary.name, outcomes=primary_outcomes, used=True))
+        observe(0, primary_outcomes)
+        assessment = coverage_fn(primary_outcomes)
     fallback_triggered = False
     fallback_reason = None
 
@@ -171,12 +282,18 @@ def acquire_family(
         # fallback is tried only while the family is STILL sparse by the same
         # family-level rule: a healthy fallback ends the chain, so a provider
         # is never called "just in case" and API usage is not inflated.
-        for fallback in providers[1:]:
+        for index, fallback in enumerate(providers[1:], start=1):
             if not fallback.is_configured():
                 runs.append(ProviderFamilyRun(provider=fallback.name, outcomes=[], used=False))
                 continue
+            fallback_skip = health.reason(fallback) if health else None
+            if fallback_skip:
+                runs.append(ProviderFamilyRun(
+                    provider=fallback.name, outcomes=_skipped_outcomes(fallback, queries, fallback_skip), used=False))
+                continue
             fallback_outcomes = _run_queries(fallback, queries, num_results=num_results, max_workers=max_workers)
             runs.append(ProviderFamilyRun(provider=fallback.name, outcomes=fallback_outcomes, used=True))
+            observe(index, fallback_outcomes)
             fallback_triggered = True
             fallback_reason = fallback_reason or assessment.reason
             if not coverage_fn(fallback_outcomes).sparse:
