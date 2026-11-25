@@ -2420,6 +2420,12 @@ def main() -> None:
     if demo:
         _render_demo_status(entry, report)
     _render_account_header(entry, report)
+    # Partial provider failure: results were retrieved, but a provider failed
+    # or was skipped, so coverage may be incomplete (B5.6). A run that
+    # retrieved nothing is handled by the existing total-failure paths.
+    coverage = demo_mode.partial_coverage_from_report(report)
+    if coverage:
+        st.warning(coverage.message)
     _render_executive_summary(report, opportunities)
     _render_metric_row(report, opportunities)
 

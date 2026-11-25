@@ -312,6 +312,126 @@ def failure_from_report(report: dict[str, Any]) -> ResearchFailure | None:
 
 
 # ---------------------------------------------------------------------------
+# Partial provider failure (a run that DID retrieve results)
+# ---------------------------------------------------------------------------
+
+PARTIAL_COVERAGE_TITLE = "Research coverage may be incomplete."
+PARTIAL_COVERAGE_FOOTER = "Results shown come from the providers that responded."
+
+# Short noun phrase for each category, used inside parentheses.
+_CATEGORY_NOUN = {
+    _AUTH: "API key rejected",
+    _QUOTA: "usage or plan limit reached",
+    _RATE: "rate limit",
+    _TIMEOUT: "timed out",
+    _NETWORK: "network problem",
+    _SERVER: "service temporarily unavailable",
+    _MALFORMED: "unexpected response",
+    _OTHER: "provider error",
+}
+
+
+@dataclass(frozen=True)
+class PartialCoverage:
+    """A completed run with results in which at least one provider failed
+    or was skipped. `message` is safe to show: provider names, categories,
+    HTTP status codes and counts only."""
+
+    message: str
+    failed_providers: tuple[str, ...]
+    skipped_providers: tuple[str, ...]
+
+
+def _describe(failure: tuple[str, int | None]) -> str:
+    category, status = failure
+    return _CATEGORY_NOUN.get(category, _CATEGORY_NOUN[_OTHER]) + (f", HTTP {status}" if status else "")
+
+
+def _searches(failed: int, sent: Any) -> str:
+    if isinstance(sent, int) and not isinstance(sent, bool) and sent >= failed:
+        return f"{failed} of {sent} searches failed"
+    return f"{failed} search failed" if failed == 1 else f"{failed} searches failed"
+
+
+def partial_coverage_from_report(report: dict[str, Any]) -> PartialCoverage | None:
+    """Warning for a run that retrieved results although at least one
+    provider failed or was skipped by run-level provider health. Returns None
+    for a fully healthy run, for a run that retrieved nothing (that is a total
+    failure, handled by failure_from_report and unchanged) and for reports
+    without the diagnostics to tell. A provider that answered with zero
+    results and no error is never treated as failed. "not configured" lines
+    (older reports) are not coverage failures."""
+    diag = _diag(report)
+    returned = diag.get("total_results_returned")
+    if not isinstance(returned, (int, float)) or isinstance(returned, bool) or returned <= 0:
+        return None
+
+    failures: dict[str, list[tuple[str, int | None]]] = {}
+    unattributed = 0
+    for line in diag.get("errors") or []:
+        text = str(line)
+        match = _REPORT_LINE_RE.match(text)
+        if match:
+            failure = _categorize(match.group("error"))
+            if failure[0] != _CONFIG:
+                failures.setdefault(match.group("provider"), []).append(failure)
+            continue
+        legacy = _LEGACY_LINE_RE.match(text)
+        if _categorize(legacy.group("error") if legacy else text)[0] != _CONFIG:
+            unattributed += 1
+
+    skips: dict[str, tuple[str, int | None]] = {}
+
+    def note_skip(provider: str, failure: tuple[str, int | None]) -> None:
+        current = skips.get(provider)
+        if current is None or _SEVERITY[failure[0]] < _SEVERITY[current[0]]:
+            skips[provider] = failure
+
+    for family in diag.get("families") or []:
+        if not isinstance(family, dict):
+            continue
+        skipped = family.get("skipped_providers")
+        if isinstance(skipped, dict):
+            for provider, reason in skipped.items():
+                note_skip(str(provider), _categorize(str(reason)))
+        match = _SKIP_REASON_RE.match(str(family.get("fallback_reason") or ""))
+        if match:
+            note_skip(match.group("provider"), _categorize(match.group("reason")))
+
+    if not failures and not skips and not unattributed:
+        return None
+
+    requests = diag.get("provider_requests")
+    requests = requests if isinstance(requests, dict) else {}
+    sentences: list[str] = []
+    for provider in sorted(set(failures) | set(skips), key=_chain_position):
+        label = _label(provider)
+        provider_failures = failures.get(provider) or []
+        skip = skips.get(provider)
+        if provider_failures:
+            worst = min(provider_failures, key=lambda f: _SEVERITY[f[0]])
+            mixed = len({f[0] for f in provider_failures}) > 1
+            detail = ("most serious: " if mixed else "") + _describe(worst)
+            sentence = f"{label}: {_searches(len(provider_failures), requests.get(provider))} ({detail})"
+            if skip is not None:
+                sentence += " and it was then skipped for the rest of the run"
+                if _describe(skip) != _describe(worst):
+                    sentence += f" ({_describe(skip)})"
+            sentences.append(sentence + ".")
+        else:
+            sentences.append(f"{label} was skipped for the rest of the run ({_describe(skip)}).")
+    if unattributed:
+        sentences.append(f"Some searches returned errors ({unattributed}).")
+
+    message = " ".join([PARTIAL_COVERAGE_TITLE, *sentences, PARTIAL_COVERAGE_FOOTER])
+    return PartialCoverage(
+        message=message,
+        failed_providers=tuple(p for p in sorted(failures, key=_chain_position)),
+        skipped_providers=tuple(p for p in sorted(skips, key=_chain_position)),
+    )
+
+
+# ---------------------------------------------------------------------------
 # Presentation
 # ---------------------------------------------------------------------------
 
