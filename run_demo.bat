@@ -17,10 +17,10 @@ echo   Current public-domain research - fresh analysis on every run
 echo   Opening http://localhost:8502  (close this window to stop)
 echo.
 
-REM Search providers: Brave (primary) - Tavily - Serper (last fallback).
-if "%BRAVE_SEARCH_API_KEY%%TAVILY_API_KEY%%SERPER_API_KEY%"=="" (
+REM Search providers: Brave (primary) - Tavily (fallback).
+if "%BRAVE_SEARCH_API_KEY%%TAVILY_API_KEY%"=="" (
     echo   WARNING: no search provider key is set in this environment.
-    echo   Set BRAVE_SEARCH_API_KEY, TAVILY_API_KEY or SERPER_API_KEY.
+    echo   Set BRAVE_SEARCH_API_KEY or TAVILY_API_KEY.
     echo   Live research will not run until one is configured.
     echo.
 )

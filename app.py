@@ -48,7 +48,6 @@ from research.analysis.report import build_report
 from research.identity import attach_official_logo, build_identity
 from research.organization import OrganizationInput
 from research.providers.openrouter_search import OpenRouterSearchProvider
-from research.providers.serper import SerperProvider
 from research.providers.tavily import TavilyProvider	
 from research.providers.registry import build_search_providers
 from ui import demo_mode
@@ -82,14 +81,14 @@ def _run_live(
     reuse_verified_identity=False so its fresh run also re-verifies identity
     instead of re-using a domain verified earlier in the session."""
     step = progress or (lambda _message: None)
-    # Search-provider chain (research/providers/registry.py): Brave -> Tavily
-    # -> Serper, configured providers only. The router falls through to the
-    # next provider only when a query family is unavailable, errored or
-    # genuinely sparse. OpenRouter search is not part of the chain.
+    # Search-provider chain (research/providers/registry.py): Brave -> Tavily,
+    # configured providers only. The router falls through to the next
+    # provider only when a query family is unavailable, errored or genuinely
+    # sparse. OpenRouter search and Serper are not part of the chain.
     providers = build_search_providers()
     if not providers:
         raise RuntimeError(
-            "No search provider API key is configured: BRAVE_SEARCH_API_KEY, TAVILY_API_KEY and SERPER_API_KEY are not configured in the environment."
+            "No search provider API key is configured: BRAVE_SEARCH_API_KEY and TAVILY_API_KEY are not configured in the environment."
         )
 
     openrouter_key = os.getenv("OPENROUTER_API_KEY", "").strip()

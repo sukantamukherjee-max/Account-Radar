@@ -94,10 +94,10 @@ FAILURE_TITLE = "Live research could not be completed. No current account result
 # SEARCH_PROVIDER_ORDER / SEARCH_PROVIDER_KEYS). This presentation module may
 # not import research code, so the values are mirrored here and
 # tests/test_demo_mode_failures.py fails if they ever drift from the registry.
-SEARCH_PROVIDER_ORDER = ("brave", "tavily", "serper")
-SEARCH_PROVIDER_KEYS = ("BRAVE_SEARCH_API_KEY", "TAVILY_API_KEY", "SERPER_API_KEY")
+SEARCH_PROVIDER_ORDER = ("brave", "tavily")
+SEARCH_PROVIDER_KEYS = ("BRAVE_SEARCH_API_KEY", "TAVILY_API_KEY")
 _PROVIDER_KEYS: dict[str, str] = dict(zip(SEARCH_PROVIDER_ORDER, SEARCH_PROVIDER_KEYS))
-_PROVIDER_LABELS = {"brave": "Brave Search", "tavily": "Tavily", "serper": "Serper"}
+_PROVIDER_LABELS = {"brave": "Brave Search", "tavily": "Tavily"}
 
 # Failure categories, most serious first (the order used to choose the hint).
 _CONFIG, _AUTH, _QUOTA, _RATE, _TIMEOUT, _NETWORK, _SERVER, _MALFORMED, _OTHER = (

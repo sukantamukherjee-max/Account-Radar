@@ -25,8 +25,8 @@ from ui.demo_mode import FAILURE_TITLE, failure_from_exception, failure_from_rep
 
 SECRET = "sk-live-NEVER-SHOW-4c1d9e"
 QUERY = '"Acme Holdings" Oman digital transformation'
-LABEL = {"brave": "Brave Search", "tavily": "Tavily", "serper": "Serper"}
-KEY = {"brave": "BRAVE_SEARCH_API_KEY", "tavily": "TAVILY_API_KEY", "serper": "SERPER_API_KEY"}
+LABEL = {"brave": "Brave Search", "tavily": "Tavily"}
+KEY = {"brave": "BRAVE_SEARCH_API_KEY", "tavily": "TAVILY_API_KEY"}
 
 
 def _line(provider: str, error: str, query: str = QUERY, family: str = "generic_news") -> str:
@@ -58,11 +58,12 @@ def test_demo_mode_provider_constants_match_the_registry():
 
 def test_no_key_hint_names_every_registry_key_with_the_primary_first():
     failure = failure_from_exception(RuntimeError(
-        "No search provider API key is configured: BRAVE_SEARCH_API_KEY, TAVILY_API_KEY and "
-        "SERPER_API_KEY are not configured in the environment."))
+        "No search provider API key is configured: BRAVE_SEARCH_API_KEY and TAVILY_API_KEY "
+        "are not configured in the environment."))
     assert failure.cause == "The research provider API key is not configured."
-    assert failure.hint == ("Set at least one of BRAVE_SEARCH_API_KEY (primary), TAVILY_API_KEY or "
-                            "SERPER_API_KEY in the environment, then restart Demo Mode.")
+    assert failure.hint == ("Set at least one of BRAVE_SEARCH_API_KEY (primary) or TAVILY_API_KEY "
+                            "in the environment, then restart Demo Mode.")
+    assert "SERPER" not in failure.hint
     for key in registry.SEARCH_PROVIDER_KEYS:
         assert key in failure.hint
     assert failure.hint.index(registry.SEARCH_PROVIDER_KEYS[0]) < failure.hint.index(registry.SEARCH_PROVIDER_KEYS[1])
@@ -96,7 +97,7 @@ CATEGORY_CASES = [
 ]
 
 
-@pytest.mark.parametrize("provider", ["brave", "tavily", "serper"])
+@pytest.mark.parametrize("provider", ["brave", "tavily"])
 @pytest.mark.parametrize("error,fragment,status,hint", CATEGORY_CASES)
 def test_each_failure_category_names_the_provider(provider, error, fragment, status, hint):
     failure = _failure(_line(provider, error))
@@ -119,8 +120,10 @@ def test_mixed_failures_are_listed_in_chain_order_whatever_the_line_order():
         _line("tavily", "HTTP 429: limit"),
         _line("brave", "HTTP 401: bad key"),
     )
+    # Serper is no longer in the chain: a Serper line from an older report is
+    # named generically and listed after the active providers.
     assert failure.cause == ("Brave Search rejected the API key (HTTP 401). Tavily hit its rate limit (HTTP 429). "
-                             "Serper did not respond in time.")
+                             "Another research provider did not respond in time.")
     assert failure.hint == "Check BRAVE_SEARCH_API_KEY, then restart Demo Mode."
 
 
@@ -137,8 +140,8 @@ def test_hint_follows_the_approved_severity_order(brave, tavily, hint):
 
 
 def test_providers_sharing_the_most_serious_category_are_all_named_in_the_hint():
-    failure = _failure(_line("serper", "HTTP 403: x"), _line("brave", "HTTP 401: x"))
-    assert failure.hint == "Check BRAVE_SEARCH_API_KEY and SERPER_API_KEY, then restart Demo Mode."
+    failure = _failure(_line("tavily", "HTTP 403: x"), _line("brave", "HTTP 401: x"))
+    assert failure.hint == "Check BRAVE_SEARCH_API_KEY and TAVILY_API_KEY, then restart Demo Mode."
     failure = _failure(_line("brave", "HTTP 402: x"), _line("tavily", "HTTP 433: x"))
     assert failure.hint == ("Check the Brave Search and Tavily plan or remaining usage "
                             "(BRAVE_SEARCH_API_KEY and TAVILY_API_KEY), then retry.")

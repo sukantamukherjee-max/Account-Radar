@@ -122,6 +122,8 @@ def test_demo_launcher_and_configuration_exist():
     assert 'cd /d "%~dp0"' in bat                      # project root, no user-specific absolute path
     assert "C:\\Users" not in bat and "smukherjee" not in bat
     assert "--client.showErrorDetails none" in bat     # no raw tracebacks for the audience
+    # The key check matches the live chain (Brave -> Tavily); Serper is not part of it.
+    assert 'if "%BRAVE_SEARCH_API_KEY%%TAVILY_API_KEY%"==""' in bat and "SERPER" not in bat.upper()
     assert _demo_mode().DEMO.port == 8502
 
 
@@ -383,7 +385,7 @@ def test_normal_mode_failure_behaviour_is_unchanged(monkeypatch):
     at = _analyze(_apptest(APP).run(), "Normal Org", "Oman")
     assert not at.exception
     assert [e.value for e in at.sidebar.error] == [
-        "No search provider API key is configured: BRAVE_SEARCH_API_KEY, TAVILY_API_KEY and SERPER_API_KEY "
+        "No search provider API key is configured: BRAVE_SEARCH_API_KEY and TAVILY_API_KEY "
         "are not configured in the environment."
     ]
     assert "Live research could not be completed" not in _html(at)

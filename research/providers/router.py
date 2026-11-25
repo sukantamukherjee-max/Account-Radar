@@ -278,7 +278,7 @@ def acquire_family(
     fallback_reason = None
 
     if assessment.sparse and len(providers) > 1:
-        # Ordered fallback chain (e.g. Brave -> Tavily -> Serper). Each
+        # Ordered fallback chain (e.g. Brave -> Tavily). Each
         # fallback is tried only while the family is STILL sparse by the same
         # family-level rule: a healthy fallback ends the chain, so a provider
         # is never called "just in case" and API usage is not inflated.

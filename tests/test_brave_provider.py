@@ -89,11 +89,11 @@ def test_brave_provider_is_recognized_and_first_in_the_chain(monkeypatch):
     provider = BraveSearchProvider(api_key=DUMMY_KEY)
     assert isinstance(provider, SearchProvider)
     assert provider.name == "brave"
-    assert SEARCH_PROVIDER_ORDER == ("brave", "tavily", "serper")
+    assert SEARCH_PROVIDER_ORDER == ("brave", "tavily")
     monkeypatch.setenv("BRAVE_SEARCH_API_KEY", DUMMY_KEY)
     monkeypatch.setenv("TAVILY_API_KEY", "tavily-test")
-    monkeypatch.setenv("SERPER_API_KEY", "serper-test")
-    assert [p.name for p in build_search_providers()] == ["brave", "tavily", "serper"]
+    monkeypatch.setenv("SERPER_API_KEY", "serper-test")          # set, but Serper is not in the chain
+    assert [p.name for p in build_search_providers()] == ["brave", "tavily"]
 
 
 def test_missing_key_means_unconfigured_and_no_request(monkeypatch):
@@ -347,15 +347,15 @@ def test_live_research_uses_the_registry_chain_without_openrouter_search(monkeyp
     monkeypatch.setenv("OPENROUTER_API_KEY", "openrouter-test")
     with pytest.raises(Stop):
         app._run_live("Any Org", "Anywhere")
-    assert seen["providers"] == ["brave", "tavily", "serper"]
+    assert seen["providers"] == ["brave", "tavily"]
 
     monkeypatch.delenv("TAVILY_API_KEY")
     with pytest.raises(Stop):
         app._run_live("Any Org", "Anywhere")
-    assert seen["providers"] == ["brave", "serper"]
+    assert seen["providers"] == ["brave"]
 
-    for var in ("BRAVE_SEARCH_API_KEY", "SERPER_API_KEY"):
-        monkeypatch.delenv(var)
+    # A Serper key alone no longer enables live research.
+    monkeypatch.delenv("BRAVE_SEARCH_API_KEY")
     with pytest.raises(RuntimeError):
         app._run_live("Any Org", "Anywhere")
 

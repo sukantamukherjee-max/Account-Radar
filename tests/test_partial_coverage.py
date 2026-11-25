@@ -33,7 +33,7 @@ from ui.demo_mode import (
 
 SECRET = "sk-live-PARTIAL-SECRET-7a7a"
 QUERY = '"Acme Holdings" Oman digital transformation'
-LABEL = {"brave": "Brave Search", "tavily": "Tavily", "serper": "Serper"}
+LABEL = {"brave": "Brave Search", "tavily": "Tavily"}
 
 
 def _line(provider, error, query=QUERY, family="generic_news"):
@@ -77,7 +77,7 @@ def test_one_provider_fails_while_results_were_retrieved():
     assert coverage.failed_providers == ("brave",) and coverage.skipped_providers == ()
 
 
-@pytest.mark.parametrize("provider", ["brave", "tavily", "serper"])
+@pytest.mark.parametrize("provider", ["brave", "tavily"])
 @pytest.mark.parametrize("error,detail", [
     ("HTTP 401: x", "API key rejected, HTTP 401"),
     ("HTTP 403: x", "API key rejected, HTTP 403"),
@@ -134,7 +134,7 @@ def test_multiple_affected_providers_are_reported_separately_in_chain_order():
     assert _body(coverage.message) == (
         "Brave Search: 2 of 50 searches failed (rate limit, HTTP 429). "
         "Tavily was skipped for the rest of the run (usage or plan limit reached, HTTP 432). "
-        "Serper: 1 of 9 searches failed (timed out).")
+        "Another research provider: 1 of 9 searches failed (timed out).")   # Serper: no longer in the chain
     assert coverage.failed_providers == ("brave", "serper") and coverage.skipped_providers == ("tavily",)
 
 

@@ -143,7 +143,7 @@ def test_brave_tavily_mode_provider_order_is_tavily_brave_serper():
 
 def test_general_provider_order_is_unchanged():
     from research.providers.registry import SEARCH_PROVIDER_ORDER
-    assert tuple(SEARCH_PROVIDER_ORDER) == ("brave", "tavily", "serper")
+    assert tuple(SEARCH_PROVIDER_ORDER) == ("brave", "tavily")
 
 
 def test_tavily_and_brave_results_are_merged_and_deduplicated_with_provenance(monkeypatch):
