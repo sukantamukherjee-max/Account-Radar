@@ -10,6 +10,7 @@ organization as plain data.
 
 from __future__ import annotations
 
+import re
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
@@ -40,6 +41,27 @@ MAX_FETCH_GENERAL = 40
 # behavior rather than an assumption.
 MAX_FETCH_LINKEDIN_SAMPLE = 8
 
+# The router's marker for a provider taken out of service earlier in the run
+# (research/providers/router.py, run-level provider health).
+_SKIPPED_ERROR_RE = re.compile(r"^skipped: unavailable earlier in this run \((?P<reason>[^)]*)\)$")
+
+
+def _skipped_providers(fo: FamilyOutcome) -> dict[str, str]:
+    """Providers the router skipped in this family because they were taken
+    out of service earlier in the run, with the reason (e.g. "HTTP 401").
+    Skipped providers send no request and add no error lines, so without
+    this their cause would be invisible in the report."""
+    out: dict[str, str] = {}
+    for run in fo.runs:
+        if run.used:
+            continue
+        for outcome in run.outcomes:
+            match = _SKIPPED_ERROR_RE.match(outcome.error or "")
+            if match:
+                out.setdefault(run.provider, match.group("reason"))
+                break
+    return out
+
 
 @dataclass
 class FamilyDiagnostic:
@@ -52,6 +74,7 @@ class FamilyDiagnostic:
     fallback_reason: str | None
     errors: list[str]
     provider_requests: dict = field(default_factory=dict)  # queries sent per provider
+    skipped_providers: dict = field(default_factory=dict)  # provider -> reason, skipped by run-level health
 
     @classmethod
     def from_family_outcome(cls, fo: FamilyOutcome) -> "FamilyDiagnostic":
@@ -66,6 +89,7 @@ class FamilyDiagnostic:
             fallback_reason=fo.fallback_reason,
             errors=fo.errors,
             provider_requests=fo.provider_requests,
+            skipped_providers=_skipped_providers(fo),
         )
 
 
@@ -170,6 +194,7 @@ class AcquisitionDiagnostics:
                     "fallback_triggered": f.fallback_triggered,
                     "fallback_reason": f.fallback_reason,
                     "error_count": len(f.errors),
+                    "skipped_providers": f.skipped_providers,
                 }
                 for f in self.family_diagnostics
             ],

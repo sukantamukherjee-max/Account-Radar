@@ -24,6 +24,7 @@ result.
 from __future__ import annotations
 
 import html
+import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -89,6 +90,98 @@ class ResearchFailure:
 
 FAILURE_TITLE = "Live research could not be completed. No current account result is being displayed."
 
+# Local copy of the live provider chain (research/providers/registry.py:
+# SEARCH_PROVIDER_ORDER / SEARCH_PROVIDER_KEYS). This presentation module may
+# not import research code, so the values are mirrored here and
+# tests/test_demo_mode_failures.py fails if they ever drift from the registry.
+SEARCH_PROVIDER_ORDER = ("brave", "tavily", "serper")
+SEARCH_PROVIDER_KEYS = ("BRAVE_SEARCH_API_KEY", "TAVILY_API_KEY", "SERPER_API_KEY")
+_PROVIDER_KEYS: dict[str, str] = dict(zip(SEARCH_PROVIDER_ORDER, SEARCH_PROVIDER_KEYS))
+_PROVIDER_LABELS = {"brave": "Brave Search", "tavily": "Tavily", "serper": "Serper"}
+
+# Failure categories, most serious first (the order used to choose the hint).
+_CONFIG, _AUTH, _QUOTA, _RATE, _TIMEOUT, _NETWORK, _SERVER, _MALFORMED, _OTHER = (
+    "config", "auth", "quota", "rate_limit", "timeout", "network", "server", "malformed", "other")
+_SEVERITY = {_CONFIG: 0, _AUTH: 1, _QUOTA: 2, _RATE: 3, _TIMEOUT: 4, _NETWORK: 4, _SERVER: 5, _MALFORMED: 6, _OTHER: 6}
+
+# What each category means, said about one named provider.
+_PROVIDER_SENTENCE = {
+    _CONFIG: "{label} is not configured",
+    _AUTH: "{label} rejected the API key",
+    _QUOTA: "{label} reached its usage or plan limit",
+    _RATE: "{label} hit its rate limit",
+    _TIMEOUT: "{label} did not respond in time",
+    _NETWORK: "{label} could not be reached (network problem)",
+    _SERVER: "{label} was temporarily unavailable",
+    _MALFORMED: "{label} returned an unexpected response",
+    _OTHER: "{label} returned an error",
+}
+
+# Real report line: "[family] provider: 'query' -> error" (router.FamilyOutcome.errors
+# with the family prefix added by acquisition). The query is a Python repr and is
+# never interpreted: only the error part is classified.
+_REPORT_LINE_RE = re.compile(
+    r"""^\[(?P<family>[^\]]*)\]\s+(?P<provider>[A-Za-z][A-Za-z0-9_]*):\s+"""
+    r"""(?P<query>'(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*")\s+->\s+(?P<error>.*)$""",
+    re.DOTALL,
+)
+_LEGACY_LINE_RE = re.compile(r"^\[[^\]]*\]\s+(?P<error>.*)$", re.DOTALL)
+_HTTP_STATUS_RE = re.compile(r"^HTTP (\d{3})\b")
+_SKIP_REASON_RE = re.compile(r"^(?P<provider>[A-Za-z][A-Za-z0-9_]*) skipped: unavailable earlier in this run \((?P<reason>[^)]*)\)$")
+
+
+def _no_key_hint() -> str:
+    keys = list(_PROVIDER_KEYS.values())
+    if not keys:
+        return "Configure a research provider API key, then restart Demo Mode."
+    named = [f"{keys[0]} (primary)"] + keys[1:]
+    listed = named[0] if len(named) == 1 else ", ".join(named[:-1]) + " or " + named[-1]
+    return f"Set at least one of {listed} in the environment, then restart Demo Mode."
+
+
+def _category_for_status(status: int) -> str:
+    if status in (401, 403):
+        return _AUTH
+    if status in (402, 432, 433):
+        return _QUOTA
+    if status == 429:
+        return _RATE
+    if 500 <= status <= 599:
+        return _SERVER
+    return _OTHER
+
+
+def _categorize(error: str) -> tuple[str, int | None]:
+    """Category (and HTTP status, if any) of ONE provider error string. Only
+    the error text is looked at -- never the query or organization name."""
+    text = (error or "").strip()
+    match = _HTTP_STATUS_RE.match(text)
+    if match:
+        status = int(match.group(1))
+        return _category_for_status(status), status
+    lowered = text.lower()
+    if lowered.endswith("not configured"):
+        return _CONFIG, None
+    if lowered.startswith("timeout") or "timed out" in lowered:
+        return _TIMEOUT, None
+    if lowered.startswith("transport error"):
+        return _NETWORK, None
+    if lowered.startswith("malformed response") or lowered.startswith("unexpected error"):
+        return _MALFORMED, None
+    skipped = re.match(r"^skipped: unavailable earlier in this run \((.*)\)$", text)
+    if skipped:
+        return _categorize(skipped.group(1))
+    return _OTHER, None
+
+
+def _label(provider: str) -> str:
+    return _PROVIDER_LABELS.get(provider, "Another research provider")
+
+
+def _chain_position(provider: str) -> tuple[int, str]:
+    order = list(_PROVIDER_KEYS)
+    return (order.index(provider), provider) if provider in order else (len(order), provider)
+
 
 def failure_from_exception(exc: BaseException) -> ResearchFailure:
     """Plain-language cause for an exception raised by the live run. The raw
@@ -96,10 +189,7 @@ def failure_from_exception(exc: BaseException) -> ResearchFailure:
     text = str(exc or "")
     lowered = text.lower()
     if "api_key" in lowered and ("not configured" in lowered or "missing" in lowered):
-        return ResearchFailure(
-            FAILURE_TITLE, "The research provider API key is not configured.",
-            "Set TAVILY_API_KEY in the environment, then restart Demo Mode.",
-        )
+        return ResearchFailure(FAILURE_TITLE, "The research provider API key is not configured.", _no_key_hint())
     if "timeout" in lowered or "timed out" in lowered:
         return ResearchFailure(FAILURE_TITLE, "The research run timed out.", "Check the connection and retry.")
     if any(k in lowered for k in ("connection", "network", "resolve", "unreachable", "ssl", "proxy")):
@@ -114,34 +204,111 @@ def _diag(report: dict[str, Any]) -> dict[str, Any]:
     return report.get("acquisition_diagnostics") or {}
 
 
-def failure_from_report(report: dict[str, Any]) -> ResearchFailure | None:
-    """A completed run that retrieved NOTHING from the providers is a failed
-    live run, not an account result (providers record errors instead of
-    raising). A run that retrieved results -- even a thin, insufficient
-    corpus -- is a real current result and is shown as such."""
-    diag = _diag(report)
-    returned = diag.get("total_results_returned")
-    if returned is None or returned > 0:
-        return None
-    errors = " ".join(str(e) for e in diag.get("errors") or []).lower()
-    if not errors:
-        return ResearchFailure(
-            FAILURE_TITLE, "The research providers returned no results for this organization.",
-            "Check the organization name and country, then retry.",
-        )
-    if "not configured" in errors:
-        cause, hint = "The research provider API key is not configured.", "Set TAVILY_API_KEY in the environment, then restart Demo Mode."
-    elif "http 401" in errors or "http 403" in errors:
+def _provider_failures(diag: dict[str, Any]) -> tuple[dict[str, tuple[str, int | None]], list[tuple[str, int | None]]]:
+    """Worst failure per named provider, from the error lines, the B5.3
+    skip markers (fallback_reason) and skipped_providers; plus the failures
+    of older-format lines that name no provider."""
+    per_provider: dict[str, tuple[str, int | None]] = {}
+    unattributed: list[tuple[str, int | None]] = []
+
+    def note(provider: str, failure: tuple[str, int | None]) -> None:
+        current = per_provider.get(provider)
+        if current is None or _SEVERITY[failure[0]] < _SEVERITY[current[0]]:
+            per_provider[provider] = failure
+
+    for line in diag.get("errors") or []:
+        text = str(line)
+        match = _REPORT_LINE_RE.match(text)
+        if match:
+            note(match.group("provider"), _categorize(match.group("error")))
+            continue
+        legacy = _LEGACY_LINE_RE.match(text)
+        unattributed.append(_categorize(legacy.group("error") if legacy else text))
+
+    for family in diag.get("families") or []:
+        if not isinstance(family, dict):
+            continue
+        skipped = family.get("skipped_providers")
+        if isinstance(skipped, dict):
+            for provider, reason in skipped.items():
+                note(str(provider), _categorize(str(reason)))
+        match = _SKIP_REASON_RE.match(str(family.get("fallback_reason") or ""))
+        if match:
+            note(match.group("provider"), _categorize(match.group("reason")))
+    return per_provider, unattributed
+
+
+def _legacy_failure(failures: list[tuple[str, int | None]]) -> ResearchFailure:
+    """Older reports (no provider names in the error lines): the original
+    single-cause wording, picked by the same severity order."""
+    category = min((c for c, _ in failures), key=_SEVERITY.__getitem__)
+    if category == _CONFIG:
+        cause, hint = "The research provider API key is not configured.", _no_key_hint()
+    elif category == _AUTH:
         cause, hint = "The research provider rejected the API key.", "Check the configured key, then restart Demo Mode."
-    elif "http 429" in errors or "http 432" in errors or "http 433" in errors:
+    elif category in (_QUOTA, _RATE):
         cause, hint = "The research provider's usage limit was reached.", "Wait a moment or check the provider plan, then retry."
-    elif "timeout" in errors:
+    elif category == _TIMEOUT:
         cause, hint = "The research provider did not respond in time.", "Check the connection and retry."
-    elif "transport error" in errors:
+    elif category == _NETWORK:
         cause, hint = "A network problem prevented live research.", "Check the connection and retry."
     else:
         cause, hint = "The research provider returned errors.", "Retry the research."
     return ResearchFailure(FAILURE_TITLE, cause, hint)
+
+
+def _hint(category: str, providers: list[str]) -> str:
+    keys = [_PROVIDER_KEYS[p] for p in providers if p in _PROVIDER_KEYS]
+    keys_text = " and ".join(keys)
+    if category == _CONFIG:
+        return _no_key_hint()
+    if category == _AUTH:
+        return f"Check {keys_text}, then restart Demo Mode." if keys else "Check the configured API key, then restart Demo Mode."
+    if category == _QUOTA:
+        names = " and ".join(_label(p) for p in providers)
+        suffix = f" ({keys_text})" if keys else ""
+        return f"Check the {names} plan or remaining usage{suffix}, then retry."
+    if category == _RATE:
+        return "Wait a moment, then retry."
+    if category in (_TIMEOUT, _NETWORK):
+        return "Check the connection and retry."
+    if category == _SERVER:
+        return "Wait a moment, then retry."
+    return "Retry the research."
+
+
+def failure_from_report(report: dict[str, Any]) -> ResearchFailure | None:
+    """A completed run that retrieved NOTHING from the providers is a failed
+    live run, not an account result (providers record errors instead of
+    raising). A run that retrieved results -- even a thin, insufficient
+    corpus -- is a real current result and is shown as such.
+
+    The explanation names each failed provider in chain order with its
+    configuration variable where relevant. It is built only from provider
+    names, failure categories and HTTP status codes: never raw error text,
+    provider payloads, search queries or API keys."""
+    diag = _diag(report)
+    returned = diag.get("total_results_returned")
+    if returned is None or returned > 0:
+        return None
+    per_provider, unattributed = _provider_failures(diag)
+    if not per_provider:
+        if unattributed:
+            return _legacy_failure(unattributed)
+        return ResearchFailure(
+            FAILURE_TITLE, "The research providers returned no results for this organization.",
+            "Check the organization name and country, then retry.",
+        )
+
+    ordered = sorted(per_provider, key=_chain_position)
+    sentences = []
+    for provider in ordered:
+        category, status = per_provider[provider]
+        sentence = _PROVIDER_SENTENCE[category].format(label=_label(provider))
+        sentences.append(sentence + (f" (HTTP {status})." if status else "."))
+    worst = min((per_provider[p][0] for p in ordered), key=_SEVERITY.__getitem__)
+    worst_providers = [p for p in ordered if _SEVERITY[per_provider[p][0]] == _SEVERITY[worst]]
+    return ResearchFailure(FAILURE_TITLE, " ".join(sentences), _hint(worst, worst_providers))
 
 
 # ---------------------------------------------------------------------------
