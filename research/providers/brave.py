@@ -16,18 +16,25 @@ Failure contract (identical in spirit to serper.py / tavily.py):
   * HTTP 429 / 5xx         -> bounded retries, then QueryOutcome.error
   * timeout / transport    -> bounded retries, then QueryOutcome.error
   * malformed 200 body     -> QueryOutcome.error "malformed response: ..."
+  * any other exception    -> QueryOutcome.error "unexpected error: ..." (no retry)
   * genuine zero results   -> QueryOutcome with an empty result list (NOT an error)
 A provider failure is therefore never turned into fake empty evidence; the
-router sees an error and can fall back.
+router sees an error and can fall back. The API key is redacted from every
+error message BEFORE it is shortened, so no fragment of it can survive the
+cut, and search() never raises for a request failure.
 
 People discovery options (opt-in; plain `search(query, num_results=...)`
 calls, i.e. all general research, send exactly the same request as before):
   * rich_snippets=True -> Brave's documented `extra_snippets` option (up to
     five more excerpts per result), returned SEPARATELY in
-    RawResult.extra_snippets and never merged into the result's snippet. If Brave rejects
-    the option (HTTP 4xx other than 429, e.g. not in the current plan), the
-    query is retried once without it AND the rejection is remembered for the
-    lifetime of this provider object, so it is never paid for twice.
+    RawResult.extra_snippets and never merged into the result's snippet. If a
+    request with the option fails with HTTP 4xx (other than 429, and other
+    than 401 / 402, which are key and payment failures unrelated to any
+    query option and are returned as they are), the query is retried once
+    without it. Only if that plain retry SUCCEEDS is the option treated as
+    rejected (e.g. not in the current plan) and left off for the lifetime of
+    this provider object; if the plain retry fails too, the failure had
+    nothing to do with the option and it stays enabled.
   * page=N -> Brave's documented `offset` paging (zero-based page index of
     `count`-sized pages, maximum 9). The response's
     `query.more_results_available` flag is passed back on the QueryOutcome
@@ -62,6 +69,12 @@ BRAVE_MAX_OFFSET = 9  # Brave's documented maximum page offset
 
 _TAG_RE = re.compile(r"<[^>]+>")
 _RETRYABLE_STATUS = (429, 500, 502, 503, 504)
+_ERROR_TEXT_LIMIT = 200
+_UNEXPECTED_PREFIX = "unexpected error: "
+_HTTP_STATUS_RE = re.compile(r"^HTTP (\d{3}):")
+# Key / payment failures: never caused by a query option, so they never
+# trigger the plain (no extra_snippets) verification request.
+_NOT_OPTION_RELATED_STATUS = frozenset({401, 402})
 
 
 def _clean_text(value: object, limit: int) -> str:
@@ -131,6 +144,30 @@ class BraveSearchProvider:
     def _redact(self, text: str) -> str:
         return text.replace(self._api_key, "***") if self._api_key else text
 
+    def _safe_text(self, text: object, limit: int = _ERROR_TEXT_LIMIT) -> str:
+        """Redact the key FIRST, then shorten: truncating first could cut the
+        key in two and leave a fragment that no longer matches the key."""
+        return self._redact(str(text or ""))[:limit]
+
+    def _unexpected(self, exc: BaseException) -> str:
+        try:
+            detail = str(exc)
+        except Exception:  # noqa: BLE001 - an exception whose str() itself fails
+            detail = ""
+        detail = detail or type(exc).__name__
+        return _UNEXPECTED_PREFIX + self._safe_text(detail, _ERROR_TEXT_LIMIT - len(_UNEXPECTED_PREFIX))
+
+    @staticmethod
+    def _may_be_option_rejection(error: str | None) -> bool:
+        """Could this failure be Brave refusing the extra_snippets option?
+        Any HTTP 4xx except rate limiting (429) and key/payment failures
+        (401, 402). Whether it really was is decided by the plain retry."""
+        match = _HTTP_STATUS_RE.match(error or "")
+        if not match:
+            return False
+        status = int(match.group(1))
+        return 400 <= status < 500 and status != 429 and status not in _NOT_OPTION_RELATED_STATUS
+
     def _wait(self, attempt: int, response: requests.Response | None = None) -> None:
         delay = self._backoff_base * (2**attempt)
         retry_after = (response.headers.get("Retry-After") if response is not None else None) or ""
@@ -162,9 +199,13 @@ class BraveSearchProvider:
         page = max(0, min(BRAVE_MAX_OFFSET, int(page or 0)))
         if rich_snippets and not self._extra_snippets_rejected:
             outcome = self._search(query, num_results=num_results, rich_snippets=True, page=page)
-            if outcome.error and outcome.error.startswith("HTTP 4") and not outcome.error.startswith("HTTP 429"):
-                self._extra_snippets_rejected = True
-                return self._search(query, num_results=num_results, rich_snippets=False, page=page)
+            if self._may_be_option_rejection(outcome.error):
+                plain = self._search(query, num_results=num_results, rich_snippets=False, page=page)
+                if plain.ok:
+                    # The same query succeeds without the option: Brave refused
+                    # the option itself, so stop paying for it.
+                    self._extra_snippets_rejected = True
+                return plain
             return outcome
         return self._search(query, num_results=num_results, rich_snippets=False, page=page)
 
@@ -209,7 +250,7 @@ class BraveSearchProvider:
                     last_error = f"HTTP {resp.status_code}, retrying"
                     self._wait(attempt, resp)
                     continue
-                last_error = f"HTTP {resp.status_code}: {self._redact((resp.text or '')[:200])}"
+                last_error = f"HTTP {resp.status_code}: {self._safe_text(resp.text)}"
                 break
             except requests.exceptions.Timeout:
                 last_error = "timeout"
@@ -218,10 +259,13 @@ class BraveSearchProvider:
                     continue
                 break
             except requests.exceptions.RequestException as exc:
-                last_error = f"transport error: {self._redact(str(exc))[:200]}"
+                last_error = f"transport error: {self._safe_text(exc)}"
                 if attempt < self._max_retries:
                     self._wait(attempt)
                     continue
+                break
+            except Exception as exc:  # noqa: BLE001 - never let a provider failure abort the run
+                last_error = self._unexpected(exc)
                 break
 
         return QueryOutcome(query=query, provider=self.name, error=last_error or "unknown error",
